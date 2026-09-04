@@ -4,6 +4,8 @@ import SwiftUI
 /// lands in a later phase, the actual play buttons.
 struct StatusPanel: View {
     @Environment(AppState.self) private var appState
+    @State private var launchStatusLine: String?
+    @State private var diagnosticsTask: Task<Void, Never>?
 
     var body: some View {
         VStack(spacing: 24) {
@@ -58,26 +60,54 @@ struct StatusPanel: View {
 
             HStack(spacing: 16) {
                 Button {
-                    // Wired up in a later phase.
+                    play(modded: true)
                 } label: {
                     Label("Play Modded", systemImage: "shippingbox.fill")
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 8)
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(true)
-                .help("Coming in a later phase")
+                .disabled(!appState.status.readyToPlay)
+                .help(appState.status.readyToPlay ? "" : "Finish setup above before playing modded")
 
                 Button {
-                    // Wired up in a later phase.
+                    play(modded: false)
                 } label: {
                     Label("Play Vanilla", systemImage: "play.fill")
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 8)
                 }
                 .buttonStyle(.bordered)
-                .disabled(true)
-                .help("Coming in a later phase")
+                .disabled(appState.status.gameFound == nil)
+            }
+
+            if let launchStatusLine {
+                Text(launchStatusLine)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            HStack(spacing: 16) {
+                Button {
+                    if let gameDir = appState.status.gameFound {
+                        Launcher.openPluginsFolder(gameDir: gameDir)
+                    }
+                } label: {
+                    Label("Open Plugins Folder", systemImage: "folder")
+                        .frame(maxWidth: .infinity)
+                }
+                .disabled(appState.status.gameFound == nil)
+
+                Button {
+                    if let gameDir = appState.status.gameFound {
+                        Launcher.openBepInExLog(gameDir: gameDir)
+                    }
+                } label: {
+                    Label("Open BepInEx Log", systemImage: "doc.text")
+                        .frame(maxWidth: .infinity)
+                }
+                .disabled(appState.status.gameFound == nil)
             }
         }
         .padding(24)
@@ -85,6 +115,25 @@ struct StatusPanel: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .task {
             await appState.refresh()
+        }
+    }
+
+    private func play(modded: Bool) {
+        guard let gameDir = appState.status.gameFound else { return }
+
+        do {
+            try Launcher.play(modded: modded)
+        } catch {
+            launchStatusLine = "Couldn't launch: \(error.localizedDescription)"
+            return
+        }
+
+        launchStatusLine = modded ? "Launching modded — watching for BepInEx…" : "Launching vanilla…"
+        diagnosticsTask?.cancel()
+        diagnosticsTask = Task {
+            let diagnosis = await Diagnostics.watch(gameDir: gameDir, modded: modded)
+            if Task.isCancelled { return }
+            launchStatusLine = diagnosis.summary
         }
     }
 }
