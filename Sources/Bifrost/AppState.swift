@@ -8,6 +8,9 @@ import Observation
 final class AppState {
     private(set) var status: SetupStatus = .unknown
     private(set) var isRefreshing = false
+    private(set) var manifest: InstalledManifest = .empty
+
+    let modManager = ModManager()
 
     /// Re-runs every setup check. Filesystem checks are cheap and run
     /// inline; the Rosetta probe shells out, so it's the only truly async
@@ -35,6 +38,16 @@ final class AppState {
             rosettaOK: rosettaOK,
             steamConfigured: steamConfigured
         )
+
+        await refreshManifest()
+    }
+
+    /// Reloads the installed-mods manifest from disk. Called after
+    /// `refresh()` and by the Browse/Installed views after any operation
+    /// (install/uninstall/update/toggle) so both stay in sync without
+    /// needing to pass state between them directly.
+    func refreshManifest() async {
+        manifest = await modManager.loadManifest()
     }
 
     private static func checkRosetta() async -> Bool {

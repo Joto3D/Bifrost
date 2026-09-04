@@ -28,14 +28,18 @@ actor BepInExInstaller {
         }
     }
 
-    /// Presence of each piece BepInEx needs, plus what version (if any) is
-    /// currently on disk.
+    /// Presence of each piece BepInEx needs. Deliberately carries no
+    /// version — `.doorstop_version` (still copied as part of the pack
+    /// payload) is UnityDoorstop's own version, not the BepInExPack_Valheim
+    /// version, so it's useless for update detection. The pack version
+    /// Bifrost actually installed is tracked separately, in its own
+    /// manifest (see `ModManager`), and passed into `dryRun`/`install` as
+    /// `manifestVersion`.
     struct InstallStatus: Sendable, Equatable {
         var bepInExCorePresent: Bool
         var doorstopLibsPresent: Bool
         var doorstopConfigPresent: Bool
         var startScriptPresent: Bool
-        var installedVersion: String?
         var wrapperInstalled: Bool
 
         var packFilesPresent: Bool {
@@ -110,16 +114,11 @@ actor BepInExInstaller {
     /// Reads what's on disk right now. Filesystem-only, no network.
     func status(gameDir: URL) -> InstallStatus {
         let fm = FileManager.default
-        let versionFile = gameDir.appendingPathComponent(".doorstop_version")
-        let installedVersion = (try? String(contentsOf: versionFile, encoding: .utf8))?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-
         return InstallStatus(
             bepInExCorePresent: fm.fileExists(atPath: gameDir.appendingPathComponent("BepInEx/core").path),
             doorstopLibsPresent: fm.fileExists(atPath: gameDir.appendingPathComponent("doorstop_libs").path),
             doorstopConfigPresent: fm.fileExists(atPath: gameDir.appendingPathComponent("doorstop_config.ini").path),
             startScriptPresent: fm.fileExists(atPath: gameDir.appendingPathComponent("start_game_bepinex.sh").path),
-            installedVersion: (installedVersion?.isEmpty == false) ? installedVersion : nil,
             wrapperInstalled: fm.fileExists(atPath: wrapperScriptURL.path)
         )
     }
@@ -139,17 +138,29 @@ actor BepInExInstaller {
     /// do right now. Fetches the latest version info (best-effort — a
     /// network failure just means version comparisons are skipped, not that
     /// this throws).
-    func dryRun(gameDir: URL) async -> [String] {
+    ///
+    /// - Parameter manifestVersion: The pack version Bifrost's own manifest
+    ///   has recorded for this install (`ModManager`'s `loader.version`),
+    ///   if any. When the pack's files are present but this is `nil` — a
+    ///   pre-Bifrost manual install, or any other install Bifrost never
+    ///   recorded — this reports the pack as installed with an unknown
+    ///   version and offers a non-forced reinstall/update, rather than
+    ///   claiming an update is actually pending (there's no reliable way to
+    ///   tell from disk alone).
+    func dryRun(gameDir: URL, manifestVersion: String? = nil) async -> [String] {
         var actions: [String] = []
         let local = status(gameDir: gameDir)
         let latest = try? await fetchLatestVersionInfo()
 
         if local.packFilesPresent {
-            if let latest, let installed = local.installedVersion, installed != latest.versionNumber {
-                actions.append("Update BepInEx pack: \(installed) -> \(latest.versionNumber) (plugins/config left untouched)")
+            if let manifestVersion {
+                if let latest, manifestVersion != latest.versionNumber {
+                    actions.append("Update BepInEx pack: \(manifestVersion) -> \(latest.versionNumber) (plugins/config left untouched)")
+                } else {
+                    actions.append("BepInEx pack already installed (version \(manifestVersion)) — nothing to do")
+                }
             } else {
-                let versionSuffix = local.installedVersion.map { " (version \($0))" } ?? ""
-                actions.append("BepInEx pack already installed\(versionSuffix) — nothing to do")
+                actions.append("BepInEx pack files present but not recorded in Bifrost's manifest — version unknown; Reinstall/Update available (not forced, plugins/config left untouched)")
             }
         } else {
             let versionDescription = latest?.versionNumber ?? "latest"
@@ -171,17 +182,19 @@ actor BepInExInstaller {
 
     /// Installs (or updates) the BepInEx pack into `gameDir`, and installs
     /// Bifrost's launch wrapper into `launchDir`. Idempotent: skips the pack
-    /// download/copy entirely when the pack files are present and already
-    /// match the latest published version, and never overwrites an existing
-    /// `mode` file (so a user's vanilla/modded choice survives a reinstall).
-    /// A reinstall/upgrade never touches `BepInEx/plugins` or
-    /// `BepInEx/config`.
-    func install(gameDir: URL, onProgress: @Sendable (Progress) -> Void = { _ in }) async throws -> InstallOutcome {
+    /// download/copy entirely when the pack files are present and
+    /// `manifestVersion` (see `dryRun`) already matches the latest
+    /// published version, and never overwrites an existing `mode` file (so
+    /// a user's vanilla/modded choice survives a reinstall). A
+    /// reinstall/upgrade never touches `BepInEx/plugins` or
+    /// `BepInEx/config`. Callers (namely `ModManager`) are responsible for
+    /// recording the returned version back into the manifest.
+    func install(gameDir: URL, manifestVersion: String? = nil, onProgress: @Sendable (Progress) -> Void = { _ in }) async throws -> InstallOutcome {
         onProgress(.fetchingVersionInfo)
         let latest = try await fetchLatestVersionInfo()
         let local = status(gameDir: gameDir)
 
-        let packUpToDate = local.packFilesPresent && local.installedVersion == latest.versionNumber
+        let packUpToDate = local.packFilesPresent && manifestVersion == latest.versionNumber
         if packUpToDate {
             onProgress(.packAlreadyUpToDate(versionNumber: latest.versionNumber))
         } else {

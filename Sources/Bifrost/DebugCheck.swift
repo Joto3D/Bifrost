@@ -61,9 +61,11 @@ enum DebugCheck {
         print("== Thunderstore index ==")
         await checkThunderstoreIndex()
 
+        let modManager = ModManager()
+
         print("")
         print("== BepInEx installer ==")
-        await checkInstaller(realGameDir: located?.directory)
+        await checkInstaller(realGameDir: located?.directory, modManager: modManager)
 
         print("")
         print("== VDF splice ==")
@@ -80,6 +82,10 @@ enum DebugCheck {
         print("")
         print("== Diagnostics classification ==")
         checkDiagnostics(gameDir: located?.directory)
+
+        print("")
+        print("== Mod manager ==")
+        await checkModManager(realGameDir: located?.directory, modManager: modManager)
     }
 
     // MARK: - Thunderstore
@@ -113,15 +119,21 @@ enum DebugCheck {
 
     // MARK: - BepInEx installer
 
-    private static func checkInstaller(realGameDir: URL?) async {
+    private static func checkInstaller(realGameDir: URL?, modManager: ModManager) async {
         guard let realGameDir else {
             print("skipped: no game dir located")
             return
         }
 
         let realInstaller = BepInExInstaller()
-        let dryRunActions = await realInstaller.dryRun(gameDir: realGameDir)
-        print("dry-run against real game dir (\(realGameDir.path)):")
+        // Manifest-driven version, per the update-detection fix — not
+        // `.doorstop_version` (see BepInExInstaller.dryRun). Likely nil at
+        // this point on a fresh checkout; the "Mod manager" section below
+        // seeds it for this dev machine's pre-existing manual install and
+        // re-proves the dry-run there.
+        let manifestVersion = await modManager.loaderVersion()
+        let dryRunActions = await realInstaller.dryRun(gameDir: realGameDir, manifestVersion: manifestVersion)
+        print("dry-run against real game dir (\(realGameDir.path)), manifest loader version = \(manifestVersion ?? "nil"):")
         for action in dryRunActions {
             print("  - \(action)")
         }
@@ -308,5 +320,154 @@ enum DebugCheck {
         let diagnosis = Diagnostics.classify(logContents: contents)
         print("classify(real LogOutput.log) -> \(String(describing: diagnosis))")
         print("summary: \(diagnosis?.summary ?? "<nil>")")
+    }
+
+    // MARK: - Mod manager
+
+    /// Exercises `ModManager` end to end against the REAL game directory:
+    /// install a simple no-dep mod, install a mod with a Jotunn dependency
+    /// (verifying auto-resolution and the loader special case), toggle
+    /// enabled state, uninstall the first mod, and re-verify the
+    /// update-detection fix now that a loader version is on record. Leaves
+    /// the real install with Jotunn + its dependent mod installed and
+    /// enabled, and the first mod removed — see the task notes for why.
+    private static func checkModManager(realGameDir: URL?, modManager: ModManager) async {
+        guard let gameDir = realGameDir else {
+            print("skipped: no game dir located")
+            return
+        }
+
+        let thunderstoreClient = ThunderstoreClient()
+        guard let index = try? await thunderstoreClient.fetchIndex(force: false) else {
+            print("skipped: could not load Thunderstore index")
+            return
+        }
+
+        // Step 0: this dev machine has BepInExPack_Valheim 5.4.2333 on disk
+        // from an earlier manual spike, installed before Bifrost's manifest
+        // existed, so there's no record of it. Seed one — exactly what
+        // ModManager.install(loader) would have recorded had the pack been
+        // installed through Bifrost — so the update-detection fix (above)
+        // has something real to compare against.
+        if await modManager.loaderVersion() == nil, await BepInExInstaller().status(gameDir: gameDir).packFilesPresent {
+            print("NOTE: seeding manifest loader version to 5.4.2333 — pre-existing manual BepInEx install on this dev machine, no prior manifest record")
+            try? await modManager.setLoaderVersion("5.4.2333")
+        }
+
+        print("")
+        print("6) update-detection fix, re-checked now that a loader version is on record:")
+        let loaderVersion = await modManager.loaderVersion()
+        let dryRunActions = await BepInExInstaller().dryRun(gameDir: gameDir, manifestVersion: loaderVersion)
+        for action in dryRunActions { print("  - \(action)") }
+        let claimsPendingUpdate = dryRunActions.contains { $0.hasPrefix("Update BepInEx pack") }
+        print("  claims a pending loader update: \(claimsPendingUpdate) -> \(claimsPendingUpdate ? "FAIL" : "PASS")")
+
+        print("")
+        print("1) install Advize-PlantEverything (simple, no plugin deps beyond the loader):")
+        await installAndVerify(fullName: "Advize-PlantEverything", index: index, gameDir: gameDir, modManager: modManager) { resolved in
+            let dllPresent = FileManager.default.fileExists(
+                atPath: gameDir.appendingPathComponent("BepInEx/plugins/Advize-PlantEverything/Advize_PlantEverything.dll").path
+            )
+            let manifestHasIt = await modManager.isInstalled(fullName: "Advize-PlantEverything")
+            print("  dll present under BepInEx/plugins/Advize-PlantEverything/: \(dllPresent)")
+            print("  manifest records it: \(manifestHasIt)")
+            return dllPresent && manifestHasIt
+        }
+
+        print("")
+        print("2) install RandyKnapp-EquipmentAndQuickSlots (depends on Jotunn + the loader):")
+        await installAndVerify(fullName: "RandyKnapp-EquipmentAndQuickSlots", index: index, gameDir: gameDir, modManager: modManager) { resolved in
+            let loaderCount = resolved.filter { if case .loader = $0 { return true }; return false }.count
+            let jotunnInstalled = await modManager.isInstalled(fullName: "ValheimModding-Jotunn")
+            let eqsInstalled = await modManager.isInstalled(fullName: "RandyKnapp-EquipmentAndQuickSlots")
+            let loaderVersionAfter = await modManager.loaderVersion()
+            print("  loader appears \(loaderCount) time(s) in the resolved plan (special-cased, never duplicated)")
+            print("  Jotunn auto-resolved & installed: \(jotunnInstalled)")
+            print("  EquipmentAndQuickSlots installed: \(eqsInstalled)")
+            print("  loader version recorded: \(loaderVersionAfter ?? "nil")")
+            return loaderCount <= 1 && jotunnInstalled && eqsInstalled && loaderVersionAfter != nil
+        }
+
+        print("")
+        print("3) setEnabled(false) then setEnabled(true) on Advize-PlantEverything:")
+        do {
+            try await modManager.setEnabled(fullName: "Advize-PlantEverything", enabled: false, gameDir: gameDir)
+            let disabledPresent = FileManager.default.fileExists(
+                atPath: gameDir.appendingPathComponent("BepInEx/plugins/Advize-PlantEverything/Advize_PlantEverything.dll.disabled").path
+            )
+            print("  after disable, .dll.disabled present: \(disabledPresent)")
+
+            try await modManager.setEnabled(fullName: "Advize-PlantEverything", enabled: true, gameDir: gameDir)
+            let enabledPresent = FileManager.default.fileExists(
+                atPath: gameDir.appendingPathComponent("BepInEx/plugins/Advize-PlantEverything/Advize_PlantEverything.dll").path
+            )
+            print("  after re-enable, .dll present: \(enabledPresent)")
+            print("  -> \((disabledPresent && enabledPresent) ? "PASS" : "FAIL")")
+        } catch {
+            print("  FAILED: \(error)")
+        }
+
+        print("")
+        print("4) uninstall Advize-PlantEverything — Jotunn/EquipmentAndQuickSlots must be untouched:")
+        do {
+            try await modManager.uninstall(fullName: "Advize-PlantEverything", gameDir: gameDir)
+            let dirGone = !FileManager.default.fileExists(atPath: gameDir.appendingPathComponent("BepInEx/plugins/Advize-PlantEverything").path)
+            let manifestGone = await !modManager.isInstalled(fullName: "Advize-PlantEverything")
+            let jotunnStillInstalled = await modManager.isInstalled(fullName: "ValheimModding-Jotunn")
+            let eqsStillInstalled = await modManager.isInstalled(fullName: "RandyKnapp-EquipmentAndQuickSlots")
+            let jotunnFilesPresent = FileManager.default.fileExists(atPath: gameDir.appendingPathComponent("BepInEx/plugins/ValheimModding-Jotunn/Jotunn.dll").path)
+            print("  BepInEx/plugins/Advize-PlantEverything/ removed: \(dirGone)")
+            print("  manifest entry removed: \(manifestGone)")
+            print("  Jotunn untouched (manifest / disk): \(jotunnStillInstalled) / \(jotunnFilesPresent)")
+            print("  EquipmentAndQuickSlots untouched (manifest): \(eqsStillInstalled)")
+            let pass = dirGone && manifestGone && jotunnStillInstalled && jotunnFilesPresent && eqsStillInstalled
+            print("  -> \(pass ? "PASS" : "FAIL")")
+        } catch {
+            print("  FAILED: \(error)")
+        }
+
+        print("")
+        print("5) final state (expected: Jotunn + EquipmentAndQuickSlots installed & enabled, PlantEverything gone):")
+        let finalManifest = await modManager.loadManifest()
+        print("  loader: \(finalManifest.loader?.version ?? "nil")")
+        for mod in finalManifest.mods.sorted(by: { $0.fullName < $1.fullName }) {
+            print("  \(mod.fullName) v\(mod.version) enabled=\(mod.enabled) files=\(mod.files.count)")
+        }
+    }
+
+    /// Resolves and installs `fullName` against the real game dir, prints
+    /// the resolved plan, then runs `verify` (which may itself await
+    /// further ModManager calls) and prints PASS/FAIL.
+    private static func installAndVerify(
+        fullName: String,
+        index: [ThunderstorePackage],
+        gameDir: URL,
+        modManager: ModManager,
+        verify: @escaping ([ModManager.ResolvedInstall]) async -> Bool
+    ) async {
+        guard let package = index.first(where: { $0.fullName == fullName }) else {
+            print("  SKIPPED: \(fullName) not found in the Thunderstore index")
+            return
+        }
+        do {
+            let resolved = try await modManager.resolve(package: package, index: index)
+            print("  resolve() -> \(resolved.map(describeResolved).joined(separator: ", "))")
+            try await modManager.install(resolved: resolved, gameDir: gameDir) { progress in
+                print("  progress: \(progress)")
+            }
+            let pass = await verify(resolved)
+            print("  -> \(pass ? "PASS" : "FAIL")")
+        } catch {
+            print("  FAILED: \(error)")
+        }
+    }
+
+    private static func describeResolved(_ item: ModManager.ResolvedInstall) -> String {
+        switch item {
+        case .loader:
+            return "denikson-BepInExPack_Valheim (loader)"
+        case .mod(let fullName, _, let version):
+            return "\(fullName)@\(version.versionNumber)"
+        }
     }
 }

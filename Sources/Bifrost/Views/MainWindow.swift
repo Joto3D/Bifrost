@@ -16,7 +16,7 @@ struct MainWindow: View {
                     Label("Browse", systemImage: "magnifyingglass")
                 }
 
-            InstalledView()
+            InstalledModsView()
                 .tabItem {
                     Label("Installed", systemImage: "square.stack.3d.up")
                 }
@@ -27,14 +27,6 @@ struct MainWindow: View {
                 }
         }
         .frame(minWidth: 900, minHeight: 600)
-    }
-}
-
-private struct InstalledView: View {
-    var body: some View {
-        Text("Installed")
-            .font(.title)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 

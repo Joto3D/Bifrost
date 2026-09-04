@@ -17,6 +17,7 @@ struct ModBrowserView: View {
         case failed(String)
     }
 
+    @Environment(AppState.self) private var appState
     @State private var client = ThunderstoreClient()
     @State private var loadState: LoadState = .loading
     @State private var searchText = ""
@@ -80,7 +81,7 @@ struct ModBrowserView: View {
                 .padding(8)
 
                 List(visible, selection: $selectedPackageID) { package in
-                    ModRow(package: package, iconURL: client.iconURL(for: package))
+                    ModRow(package: package, iconURL: client.iconURL(for: package), installed: appState.manifest.mods.contains { $0.fullName == package.fullName })
                         .tag(package.id)
                 }
                 .listStyle(.plain)
@@ -93,7 +94,7 @@ struct ModBrowserView: View {
         if case .loaded(let packages) = loadState,
            let selectedPackageID,
            let package = packages.first(where: { $0.id == selectedPackageID }) {
-            ModDetailView(package: package, iconURL: client.iconURL(for: package))
+            ModDetailView(package: package, iconURL: client.iconURL(for: package), index: packages)
         } else {
             Text("Select a mod")
                 .foregroundStyle(.secondary)
@@ -138,15 +139,23 @@ struct ModBrowserView: View {
 private struct ModRow: View {
     let package: ThunderstorePackage
     let iconURL: URL?
+    let installed: Bool
 
     var body: some View {
         HStack(spacing: 12) {
             ModIconView(url: iconURL, size: 44)
 
             VStack(alignment: .leading, spacing: 2) {
-                Text(package.name)
-                    .font(.body.weight(.semibold))
-                    .lineLimit(1)
+                HStack(spacing: 6) {
+                    Text(package.name)
+                        .font(.body.weight(.semibold))
+                        .lineLimit(1)
+                    if installed {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundStyle(.green)
+                            .help("Installed")
+                    }
+                }
                 Text(package.owner)
                     .font(.caption)
                     .foregroundStyle(.secondary)
