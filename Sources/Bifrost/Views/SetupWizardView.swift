@@ -44,6 +44,7 @@ struct SetupWizardView: View {
     }
 
     @Environment(AppState.self) private var appState
+    @Environment(ThemeStore.self) private var themeStore
     @Environment(\.dismiss) private var dismiss
 
     @State private var step: Step = .welcome
@@ -83,7 +84,7 @@ struct SetupWizardView: View {
             HStack(spacing: 6) {
                 ForEach(Step.allCases, id: \.rawValue) { s in
                     Capsule()
-                        .fill(s.rawValue <= step.rawValue ? AnyShapeStyle(Theme.auroraGradient) : AnyShapeStyle(Color.secondary.opacity(0.25)))
+                        .fill(s.rawValue <= step.rawValue ? AnyShapeStyle(themeStore.current.accentGradient) : AnyShapeStyle(Color.secondary.opacity(0.25)))
                         .frame(width: s == step ? 22 : 7, height: 7)
                 }
                 Spacer()

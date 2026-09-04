@@ -117,6 +117,7 @@ struct ConfigEditorView: View {
     let title: String
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(ThemeStore.self) private var themeStore
 
     @State private var originalText: String?
     @State private var configFile: BepInExConfig.ConfigFile = .empty
@@ -236,7 +237,7 @@ struct ConfigEditorView: View {
                     }
                     .font(.caption2.weight(.medium))
                     .buttonStyle(.plain)
-                    .foregroundStyle(Theme.auroraGradient)
+                    .foregroundStyle(themeStore.current.accentGradient)
                 }
             }
         }

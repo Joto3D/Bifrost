@@ -12,6 +12,7 @@ struct SettingsView: View {
     }
 
     @Environment(AppState.self) private var appState
+    @Environment(ThemeStore.self) private var themeStore
     @State private var indexRefreshState: IndexRefreshState = .idle
     @AppStorage(Launcher.startSteamSilentlyDefaultsKey) private var startSteamSilently = true
 
@@ -29,6 +30,19 @@ struct SettingsView: View {
                 Text("When Bifrost needs to start Steam, it starts minimized without opening the Steam window. Steam may still show windows for logins or client updates.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+
+            Section("Appearance") {
+                ForEach(ThemePalette.all) { palette in
+                    ThemeRow(
+                        palette: palette,
+                        isSelected: palette.id == themeStore.current.id
+                    ) {
+                        withAnimation(Theme.settle) {
+                            themeStore.current = palette
+                        }
+                    }
+                }
             }
 
             Section("Setup") {
@@ -164,7 +178,7 @@ struct SettingsView: View {
         HStack(spacing: Theme.Spacing.m) {
             Image(systemName: "shield.lefthalf.filled")
                 .font(.title2)
-                .foregroundStyle(Theme.auroraGradient)
+                .foregroundStyle(themeStore.current.accentGradient)
             VStack(alignment: .leading, spacing: 2) {
                 Text("Bifrost \(appVersion)")
                     .font(Theme.headingFont(14))
@@ -182,5 +196,56 @@ struct SettingsView: View {
             return version
         }
         return "dev"
+    }
+}
+
+// MARK: - Appearance
+
+/// One row in the Appearance section's theme picker: a live swatch (an
+/// accent-gradient capsule beside a small surface-tinted chip) plus the
+/// palette's name. Tapping applies the palette immediately — `SettingsView`
+/// wraps the assignment in `Theme.settle` so every themed view cross-fades
+/// rather than popping to the new colors.
+private struct ThemeRow: View {
+    let palette: ThemePalette
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: Theme.Spacing.m) {
+                swatch
+                Text(palette.displayName)
+                    .foregroundStyle(.primary)
+                Spacer()
+                if isSelected {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(palette.accentGradient)
+                }
+            }
+            .padding(.vertical, 2)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .listRowBackground(isSelected ? palette.badgeTint.opacity(0.12) : Color.clear)
+    }
+
+    private var swatch: some View {
+        HStack(spacing: 6) {
+            Capsule()
+                .fill(palette.accentGradient)
+                .frame(width: 36, height: 14)
+            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                .fill(.regularMaterial)
+                .overlay {
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .fill(palette.surface.opacity(0.5))
+                }
+                .overlay {
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .strokeBorder(palette.secondaryAccent.opacity(0.6), lineWidth: 1)
+                }
+                .frame(width: 22, height: 14)
+        }
     }
 }

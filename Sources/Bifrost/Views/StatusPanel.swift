@@ -18,6 +18,7 @@ struct StatusPanel: View {
     }
 
     @Environment(AppState.self) private var appState
+    @Environment(ThemeStore.self) private var themeStore
     @State private var launchStatusLine: String?
     @State private var diagnosticsTask: Task<Void, Never>?
     @State private var launchTask: Task<Void, Never>?
@@ -95,10 +96,10 @@ struct StatusPanel: View {
         HStack(alignment: .center, spacing: Theme.Spacing.m) {
             ZStack {
                 Circle()
-                    .fill(Theme.night.opacity(0.5))
+                    .fill(themeStore.current.surface.opacity(0.5))
                 Image(systemName: "shield.lefthalf.filled")
                     .font(.system(size: 22, weight: .semibold))
-                    .foregroundStyle(Theme.auroraGradient)
+                    .foregroundStyle(themeStore.current.accentGradient)
             }
             .frame(width: 48, height: 48)
 

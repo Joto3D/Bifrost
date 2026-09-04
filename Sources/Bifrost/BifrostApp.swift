@@ -4,6 +4,7 @@ import AppKit
 @main
 struct BifrostApp: App {
     @State private var appState = AppState()
+    @State private var themeStore = ThemeStore()
 
     init() {
         // Headless diagnostics escape hatch: `swift run Bifrost --check`
@@ -23,6 +24,7 @@ struct BifrostApp: App {
         WindowGroup("Bifrost") {
             MainWindow()
                 .environment(appState)
+                .environment(themeStore)
                 .frame(minWidth: 900, minHeight: 600)
         }
         .defaultSize(width: 900, height: 600)
