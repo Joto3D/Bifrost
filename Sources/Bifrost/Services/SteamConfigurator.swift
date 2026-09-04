@@ -52,7 +52,7 @@ actor SteamConfigurator {
     ///     a directory other than the real `Steam/userdata`, so verification
     ///     can run against a copy of a real config without touching it.
     init(
-        wrapperScriptURL: URL = BepInExInstaller.defaultLaunchDir.appendingPathComponent("run_modded.sh"),
+        wrapperScriptURL: URL = BepInExInstaller.wrapperScriptURL(launchDir: BepInExInstaller.defaultLaunchDir),
         userdataRootOverride: URL? = nil
     ) {
         self.wrapperScriptURL = wrapperScriptURL

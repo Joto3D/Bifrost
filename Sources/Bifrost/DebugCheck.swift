@@ -86,6 +86,28 @@ enum DebugCheck {
         print("")
         print("== Mod manager ==")
         await checkModManager(realGameDir: located?.directory, modManager: modManager)
+
+        print("")
+        print("== Wizard simulation (fresh-machine) ==")
+        await checkWizardSimulation()
+    }
+
+    // MARK: - Safety guard
+
+    /// Traps loudly if `url` is not rooted under the system temp directory.
+    /// Every fake-dir test section below must call this on each throwaway
+    /// path it constructs before handing it to a service that writes files —
+    /// this is exactly the guard that would have caught the bug where a
+    /// wrapper script got written into the *real* Bifrost launch directory
+    /// while templated with a throwaway `gameDir` (see `BepInExInstaller`'s
+    /// init doc for the fix that also makes this structurally harder to
+    /// repeat).
+    private static func assertUnderTempDir(_ url: URL, label: String) {
+        let tempPath = FileManager.default.temporaryDirectory.resolvingSymlinksInPath().path
+        let urlPath = url.resolvingSymlinksInPath().path
+        guard urlPath.hasPrefix(tempPath) else {
+            fatalError("SAFETY: \(label) (\(url.path)) is not under the temp directory (\(FileManager.default.temporaryDirectory.path)) — refusing to let a --check test section write here")
+        }
     }
 
     // MARK: - Thunderstore
@@ -132,7 +154,9 @@ enum DebugCheck {
         // seeds it for this dev machine's pre-existing manual install and
         // re-proves the dry-run there.
         let manifestVersion = await modManager.loaderVersion()
-        let dryRunActions = await realInstaller.dryRun(gameDir: realGameDir, manifestVersion: manifestVersion)
+        // Read-only (dryRun never writes), so the real launch dir here is
+        // safe — it's only used to describe what a real install would do.
+        let dryRunActions = await realInstaller.dryRun(gameDir: realGameDir, launchDir: BepInExInstaller.defaultLaunchDir, manifestVersion: manifestVersion)
         print("dry-run against real game dir (\(realGameDir.path)), manifest loader version = \(manifestVersion ?? "nil"):")
         for action in dryRunActions {
             print("  - \(action)")
@@ -149,9 +173,11 @@ enum DebugCheck {
         print("")
         print("full install into a throwaway fake game dir: \(fakeGameDir.path)")
         print("  (wrapper pointed at a throwaway launch dir: \(fakeLaunchDir.path), not the real one)")
-        let fakeInstaller = BepInExInstaller(launchDir: fakeLaunchDir)
+        assertUnderTempDir(fakeGameDir, label: "fakeGameDir")
+        assertUnderTempDir(fakeLaunchDir, label: "fakeLaunchDir")
+        let fakeInstaller = BepInExInstaller()
         do {
-            let outcome = try await fakeInstaller.install(gameDir: fakeGameDir) { progress in
+            let outcome = try await fakeInstaller.install(gameDir: fakeGameDir, launchDir: fakeLaunchDir) { progress in
                 print("  progress: \(progress)")
             }
             print("  installed version \(outcome.versionNumber) (packWasUpToDate=\(outcome.packWasUpToDate), modeFileCreated=\(outcome.modeFileCreated))")
@@ -349,7 +375,7 @@ enum DebugCheck {
         // ModManager.install(loader) would have recorded had the pack been
         // installed through Bifrost — so the update-detection fix (above)
         // has something real to compare against.
-        if await modManager.loaderVersion() == nil, await BepInExInstaller().status(gameDir: gameDir).packFilesPresent {
+        if await modManager.loaderVersion() == nil, await BepInExInstaller().status(gameDir: gameDir, launchDir: BepInExInstaller.defaultLaunchDir).packFilesPresent {
             print("NOTE: seeding manifest loader version to 5.4.2333 — pre-existing manual BepInEx install on this dev machine, no prior manifest record")
             try? await modManager.setLoaderVersion("5.4.2333")
         }
@@ -357,7 +383,7 @@ enum DebugCheck {
         print("")
         print("6) update-detection fix, re-checked now that a loader version is on record:")
         let loaderVersion = await modManager.loaderVersion()
-        let dryRunActions = await BepInExInstaller().dryRun(gameDir: gameDir, manifestVersion: loaderVersion)
+        let dryRunActions = await BepInExInstaller().dryRun(gameDir: gameDir, launchDir: BepInExInstaller.defaultLaunchDir, manifestVersion: loaderVersion)
         for action in dryRunActions { print("  - \(action)") }
         let claimsPendingUpdate = dryRunActions.contains { $0.hasPrefix("Update BepInEx pack") }
         print("  claims a pending loader update: \(claimsPendingUpdate) -> \(claimsPendingUpdate ? "FAIL" : "PASS")")
@@ -433,6 +459,110 @@ enum DebugCheck {
         for mod in finalManifest.mods.sorted(by: { $0.fullName < $1.fullName }) {
             print("  \(mod.fullName) v\(mod.version) enabled=\(mod.enabled) files=\(mod.files.count)")
         }
+    }
+
+    // MARK: - Wizard simulation
+
+    /// Drives `SetupWizardView`'s underlying step logic — not the UI —
+    /// against a throwaway fake environment simulating a fresh machine: an
+    /// empty fake game dir, a temp Bifrost launch dir, and a copy of the
+    /// real `localconfig.vdf` with its `LaunchOptions` line stripped so the
+    /// Steam-config step starts out genuinely "needed". Each step is run in
+    /// wizard order and asserted to transition from needed to done, all
+    /// against paths verified (`assertUnderTempDir`) to be under the temp
+    /// directory — never the real game dir, real Bifrost launch dir, or
+    /// real `localconfig.vdf`.
+    ///
+    /// Deliberately does **not** call `SteamConfigurator.configure()`:
+    /// that method unconditionally quits the *real, currently running*
+    /// Steam process whenever the value it reads differs from the desired
+    /// one, regardless of which `localconfig.vdf` path it was pointed at —
+    /// there's no way to fake that part safely. So the "Configure Steam"
+    /// step here exercises `VDF.settingKey` directly — the same splice
+    /// primitive `configure()` delegates to — which faithfully proves the
+    /// step's file-editing logic without ever touching the real Steam
+    /// process. The wizard's real "Configure Steam" step (reachable only by
+    /// a human clicking through consent text in the UI) still calls the
+    /// real `configure()`.
+    private static func checkWizardSimulation() async {
+        guard let realConfigURL = SteamConfigurator.realLocalConfigURL(),
+              let originalText = try? String(contentsOf: realConfigURL, encoding: .utf8) else {
+            print("skipped: could not read real localconfig.vdf to build a fixture")
+            return
+        }
+
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent("BifrostCheck-wizard-\(UUID().uuidString)")
+        let fakeGameDir = root.appendingPathComponent("game")
+        let fakeLaunchDir = root.appendingPathComponent("bifrost-launch")
+        let fakeConfigDir = root.appendingPathComponent("userdata/00000001/config")
+        let fakeConfigURL = fakeConfigDir.appendingPathComponent("localconfig.vdf")
+
+        assertUnderTempDir(fakeGameDir, label: "wizard fakeGameDir")
+        assertUnderTempDir(fakeLaunchDir, label: "wizard fakeLaunchDir")
+        assertUnderTempDir(fakeConfigURL, label: "wizard fakeConfigURL")
+
+        defer { try? fm.removeItem(at: root) }
+
+        do {
+            try fm.createDirectory(at: fakeGameDir, withIntermediateDirectories: true)
+            try fm.createDirectory(at: fakeConfigDir, withIntermediateDirectories: true)
+            let withoutLaunchOptions = try VDF.removingKey("LaunchOptions", atPath: SteamConfigurator.appPath, in: originalText)
+            try withoutLaunchOptions.write(to: fakeConfigURL, atomically: true, encoding: .utf8)
+        } catch {
+            print("skipped: could not build fixture: \(error)")
+            return
+        }
+
+        print("fixture: empty fake game dir \(fakeGameDir.path)")
+        print("fixture: fake localconfig.vdf (LaunchOptions stripped) \(fakeConfigURL.path)")
+
+        print("")
+        print("step 1) Detect game — needed: bepinexInstalled(emptyFakeGameDir) = \(GameLocator.bepinexInstalled(at: fakeGameDir)) (expect false)")
+
+        print("")
+        print("step 2) Install BepInEx — needed -> done:")
+        let installer = BepInExInstaller()
+        var bepinexStepPassed = false
+        do {
+            let neededBefore = !GameLocator.bepinexInstalled(at: fakeGameDir)
+            let outcome = try await installer.install(gameDir: fakeGameDir, launchDir: fakeLaunchDir) { progress in
+                print("  progress: \(progress)")
+            }
+            let doneAfter = GameLocator.bepinexInstalled(at: fakeGameDir)
+            let wrapperWritten = fm.fileExists(atPath: BepInExInstaller.wrapperScriptURL(launchDir: fakeLaunchDir).path)
+            bepinexStepPassed = neededBefore && doneAfter && wrapperWritten
+            print("  needed-before=\(neededBefore) done-after=\(doneAfter) wrapper-written=\(wrapperWritten) version=\(outcome.versionNumber)")
+            print("  -> \(bepinexStepPassed ? "PASS" : "FAIL")")
+        } catch {
+            print("  FAILED: \(error)")
+        }
+
+        print("")
+        print("step 3) Configure Steam (VDF splice only — real Steam process untouched) — needed -> done:")
+        var vdfStepPassed = false
+        do {
+            let currentText = try String(contentsOf: fakeConfigURL, encoding: .utf8)
+            let beforeValue = VDF.value(forKey: "LaunchOptions", atPath: SteamConfigurator.appPath, in: currentText)
+            let desired = "\"\(BepInExInstaller.wrapperScriptURL(launchDir: fakeLaunchDir).path)\" %command%"
+            let neededBefore = (beforeValue == nil)
+
+            let spliced = try VDF.settingKey("LaunchOptions", to: desired, atPath: SteamConfigurator.appPath, in: currentText)
+            try spliced.text.write(to: fakeConfigURL, atomically: true, encoding: .utf8)
+
+            let afterText = try String(contentsOf: fakeConfigURL, encoding: .utf8)
+            let afterValue = VDF.value(forKey: "LaunchOptions", atPath: SteamConfigurator.appPath, in: afterText)
+            let doneAfter = afterValue == desired
+
+            vdfStepPassed = neededBefore && doneAfter
+            print("  needed-before=\(neededBefore) (was \(beforeValue ?? "<none>")) done-after=\(doneAfter) (now \(afterValue ?? "<none>"))")
+            print("  -> \(vdfStepPassed ? "PASS" : "FAIL")")
+        } catch {
+            print("  FAILED: \(error)")
+        }
+
+        print("")
+        print("step 4) Done — overall wizard simulation: \((bepinexStepPassed && vdfStepPassed) ? "PASS" : "FAIL")")
     }
 
     /// Resolves and installs `fullName` against the real game dir, prints

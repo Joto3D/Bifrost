@@ -1,10 +1,14 @@
 import SwiftUI
 
-/// Top-level window content for Bifrost. Placeholder tabs for now — each
-/// will grow into a real feature area (mod browsing, install management,
-/// launch configuration, etc.) as the app is built out.
+/// Top-level window content for Bifrost: the four main tabs, the shared
+/// error alert, and the first-run setup wizard sheet.
 struct MainWindow: View {
+    @Environment(AppState.self) private var appState
+    @State private var hasCheckedFirstRun = false
+
     var body: some View {
+        @Bindable var appState = appState
+
         TabView {
             StatusPanel()
                 .tabItem {
@@ -27,13 +31,17 @@ struct MainWindow: View {
                 }
         }
         .frame(minWidth: 900, minHeight: 600)
-    }
-}
-
-private struct SettingsView: View {
-    var body: some View {
-        Text("Settings")
-            .font(.title)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .bifrostErrorAlert(appState)
+        .sheet(isPresented: $appState.setupWizardPresented) {
+            SetupWizardView()
+        }
+        .task {
+            guard !hasCheckedFirstRun else { return }
+            hasCheckedFirstRun = true
+            await appState.refresh()
+            if !appState.status.readyToPlay {
+                appState.setupWizardPresented = true
+            }
+        }
     }
 }

@@ -44,6 +44,11 @@ struct StatusPanel: View {
                 .padding(8)
             }
 
+            Text(modsSummaryLine)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
             Button {
                 Task { await appState.refresh() }
             } label: {
@@ -116,6 +121,13 @@ struct StatusPanel: View {
         .task {
             await appState.refresh()
         }
+    }
+
+    private var modsSummaryLine: String {
+        let modCount = appState.manifest.mods.count
+        let modsText = "\(modCount) mod\(modCount == 1 ? "" : "s") installed"
+        guard let loaderVersion = appState.manifest.loader?.version else { return modsText }
+        return "\(modsText) · BepInEx \(loaderVersion)"
     }
 
     private func play(modded: Bool) {

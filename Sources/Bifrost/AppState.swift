@@ -10,6 +10,16 @@ final class AppState {
     private(set) var isRefreshing = false
     private(set) var manifest: InstalledManifest = .empty
 
+    /// Drives `SetupWizardView`'s sheet from anywhere in the view
+    /// hierarchy (`MainWindow` presents it automatically on first launch
+    /// when not `readyToPlay`; `SettingsView`'s "Run setup wizard" button
+    /// re-opens it on demand).
+    var setupWizardPresented = false
+
+    /// The single error currently surfaced to the user via the shared
+    /// alert modifier (see `View.bifrostErrorAlert`), if any.
+    var lastError: BifrostError?
+
     let modManager = ModManager()
 
     /// Re-runs every setup check. Filesystem checks are cheap and run
@@ -56,4 +66,18 @@ final class AppState {
         }
         return result.status == 0
     }
+
+    /// Surfaces `message` to the user via the shared alert modifier
+    /// (`View.bifrostErrorAlert`). Any view holding an `AppState` can call
+    /// this instead of rolling its own alert state.
+    func reportError(_ title: String, _ message: String) {
+        lastError = BifrostError(title: title, message: message)
+    }
+}
+
+/// A user-facing error surfaced through `View.bifrostErrorAlert`.
+struct BifrostError: Identifiable, Equatable {
+    let id = UUID()
+    let title: String
+    let message: String
 }

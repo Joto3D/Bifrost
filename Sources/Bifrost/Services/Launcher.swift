@@ -50,4 +50,12 @@ enum Launcher {
     static func openBepInExLog(gameDir: URL) {
         NSWorkspace.shared.open(gameDir.appendingPathComponent("BepInEx/LogOutput.log"))
     }
+
+    /// Opens the launch wrapper's own log (`wrapper.log`, appended to by
+    /// `run_modded.sh` on every launch — records the mode it saw and the
+    /// arguments Steam passed it) in its default viewer.
+    @MainActor
+    static func openWrapperLog() {
+        NSWorkspace.shared.open(BepInExInstaller.defaultLaunchDir.appendingPathComponent("wrapper.log"))
+    }
 }

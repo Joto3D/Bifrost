@@ -20,11 +20,12 @@ struct BifrostApp: App {
     }
 
     var body: some Scene {
-        WindowGroup {
+        WindowGroup("Bifrost") {
             MainWindow()
                 .environment(appState)
                 .frame(minWidth: 900, minHeight: 600)
         }
         .defaultSize(width: 900, height: 600)
+        .windowResizability(.contentMinSize)
     }
 }

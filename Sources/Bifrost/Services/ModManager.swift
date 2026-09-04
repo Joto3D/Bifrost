@@ -85,21 +85,33 @@ actor ModManager {
     private let session: URLSession
     private let bepInExInstaller: BepInExInstaller
     let manifestURL: URL
+    /// Where the loader special case installs the launch wrapper + mode
+    /// file. Defaults to the real Bifrost support directory; tests exercising
+    /// a fake `gameDir` must override this with a matching temp directory —
+    /// `BepInExInstaller` takes no launch-dir default of its own precisely
+    /// so this pairing has to be made explicit here instead of silently
+    /// falling back to the real one (see `BepInExInstaller`'s init doc).
+    let launchDir: URL
 
     /// - Parameters:
     ///   - session: Defaults to `.shared`. Overridable for tests.
     ///   - bepInExInstaller: Overridable for tests so the loader special
-    ///     case never touches a real launch setup.
+    ///     case can use an isolated `URLSession`.
     ///   - manifestURL: Defaults to the real Bifrost support directory;
     ///     tests should override this with a temp file.
+    ///   - launchDir: Defaults to the real Bifrost launch directory; tests
+    ///     that pass a fake `gameDir` to `install`/`resolve` must override
+    ///     this with a matching temp directory.
     init(
         session: URLSession = .shared,
         bepInExInstaller: BepInExInstaller = BepInExInstaller(),
-        manifestURL: URL = ModManager.defaultManifestURL
+        manifestURL: URL = ModManager.defaultManifestURL,
+        launchDir: URL = BepInExInstaller.defaultLaunchDir
     ) {
         self.session = session
         self.bepInExInstaller = bepInExInstaller
         self.manifestURL = manifestURL
+        self.launchDir = launchDir
     }
 
     static var defaultManifestURL: URL {
@@ -242,7 +254,7 @@ actor ModManager {
             switch item {
             case .loader:
                 onProgress(.installingLoader)
-                let outcome = try await bepInExInstaller.install(gameDir: gameDir, manifestVersion: loaderVersion())
+                let outcome = try await bepInExInstaller.install(gameDir: gameDir, launchDir: launchDir, manifestVersion: loaderVersion())
                 try setLoaderVersion(outcome.versionNumber)
             case .mod(let fullName, _, let version):
                 try await installMod(fullName: fullName, version: version, gameDir: gameDir, onProgress: onProgress)

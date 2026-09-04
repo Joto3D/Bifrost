@@ -88,17 +88,22 @@ actor BepInExInstaller {
     ]
 
     private let session: URLSession
-    let launchDir: URL
 
-    /// - Parameters:
-    ///   - session: Defaults to `.shared`. Overridable for tests.
-    ///   - launchDir: Where the launch wrapper + mode file are installed.
-    ///     Defaults to the real Bifrost support directory; tests should
-    ///     override this with a temp directory so they never touch a real
-    ///     launch setup.
-    init(session: URLSession = .shared, launchDir: URL = BepInExInstaller.defaultLaunchDir) {
+    /// - Parameter session: Defaults to `.shared`. Overridable for tests.
+    ///
+    /// Deliberately holds no `launchDir` state: every operation that
+    /// touches the launch wrapper/mode file takes `launchDir` as an
+    /// explicit parameter (see `status`, `dryRun`, `install` below) rather
+    /// than fixing it at construction time. This is a deliberate safety
+    /// property — a prior bug wrote the launch wrapper into the *real*
+    /// Bifrost launch directory (`defaultLaunchDir`) while templating it
+    /// with a throwaway test `gameDir`, because an installer instance
+    /// constructed with the (real) default `launchDir` was reused against a
+    /// fake `gameDir`. Forcing `launchDir` to be named at every call site
+    /// makes that pairing visible and grep-able instead of silently
+    /// defaulted.
+    init(session: URLSession = .shared) {
         self.session = session
-        self.launchDir = launchDir
     }
 
     static var defaultLaunchDir: URL {
@@ -106,20 +111,20 @@ actor BepInExInstaller {
             .appendingPathComponent("Library/Application Support/Bifrost/launch")
     }
 
-    var wrapperScriptURL: URL { launchDir.appendingPathComponent("run_modded.sh") }
-    var modeFileURL: URL { launchDir.appendingPathComponent("mode") }
+    static func wrapperScriptURL(launchDir: URL) -> URL { launchDir.appendingPathComponent("run_modded.sh") }
+    static func modeFileURL(launchDir: URL) -> URL { launchDir.appendingPathComponent("mode") }
 
     // MARK: - Status
 
     /// Reads what's on disk right now. Filesystem-only, no network.
-    func status(gameDir: URL) -> InstallStatus {
+    func status(gameDir: URL, launchDir: URL) -> InstallStatus {
         let fm = FileManager.default
         return InstallStatus(
             bepInExCorePresent: fm.fileExists(atPath: gameDir.appendingPathComponent("BepInEx/core").path),
             doorstopLibsPresent: fm.fileExists(atPath: gameDir.appendingPathComponent("doorstop_libs").path),
             doorstopConfigPresent: fm.fileExists(atPath: gameDir.appendingPathComponent("doorstop_config.ini").path),
             startScriptPresent: fm.fileExists(atPath: gameDir.appendingPathComponent("start_game_bepinex.sh").path),
-            wrapperInstalled: fm.fileExists(atPath: wrapperScriptURL.path)
+            wrapperInstalled: fm.fileExists(atPath: Self.wrapperScriptURL(launchDir: launchDir).path)
         )
     }
 
@@ -147,9 +152,9 @@ actor BepInExInstaller {
     ///   version and offers a non-forced reinstall/update, rather than
     ///   claiming an update is actually pending (there's no reliable way to
     ///   tell from disk alone).
-    func dryRun(gameDir: URL, manifestVersion: String? = nil) async -> [String] {
+    func dryRun(gameDir: URL, launchDir: URL, manifestVersion: String? = nil) async -> [String] {
         var actions: [String] = []
-        let local = status(gameDir: gameDir)
+        let local = status(gameDir: gameDir, launchDir: launchDir)
         let latest = try? await fetchLatestVersionInfo()
 
         if local.packFilesPresent {
@@ -170,9 +175,9 @@ actor BepInExInstaller {
         }
 
         if local.wrapperInstalled {
-            actions.append("Launch wrapper already installed at \(wrapperScriptURL.path) — nothing to do")
+            actions.append("Launch wrapper already installed at \(Self.wrapperScriptURL(launchDir: launchDir).path) — nothing to do")
         } else {
-            actions.append("Install launch wrapper to \(wrapperScriptURL.path) (mode=modded)")
+            actions.append("Install launch wrapper to \(Self.wrapperScriptURL(launchDir: launchDir).path) (mode=modded)")
         }
 
         return actions
@@ -189,10 +194,10 @@ actor BepInExInstaller {
     /// reinstall/upgrade never touches `BepInEx/plugins` or
     /// `BepInEx/config`. Callers (namely `ModManager`) are responsible for
     /// recording the returned version back into the manifest.
-    func install(gameDir: URL, manifestVersion: String? = nil, onProgress: @Sendable (Progress) -> Void = { _ in }) async throws -> InstallOutcome {
+    func install(gameDir: URL, launchDir: URL, manifestVersion: String? = nil, onProgress: @Sendable (Progress) -> Void = { _ in }) async throws -> InstallOutcome {
         onProgress(.fetchingVersionInfo)
         let latest = try await fetchLatestVersionInfo()
-        let local = status(gameDir: gameDir)
+        let local = status(gameDir: gameDir, launchDir: launchDir)
 
         let packUpToDate = local.packFilesPresent && manifestVersion == latest.versionNumber
         if packUpToDate {
@@ -202,7 +207,7 @@ actor BepInExInstaller {
         }
 
         onProgress(.installingWrapper)
-        let modeFileCreated = try installWrapper(gameDir: gameDir)
+        let modeFileCreated = try installWrapper(gameDir: gameDir, launchDir: launchDir)
 
         onProgress(.done(versionNumber: latest.versionNumber))
         return InstallOutcome(versionNumber: latest.versionNumber, packWasUpToDate: packUpToDate, modeFileCreated: modeFileCreated)
@@ -294,9 +299,12 @@ actor BepInExInstaller {
     /// static content with no user state) and creates the `mode` file only
     /// if one doesn't already exist, so a user's vanilla/modded choice
     /// survives a reinstall. Returns whether the mode file was created.
-    private func installWrapper(gameDir: URL) throws -> Bool {
+    private func installWrapper(gameDir: URL, launchDir: URL) throws -> Bool {
         let fm = FileManager.default
         try fm.createDirectory(at: launchDir, withIntermediateDirectories: true)
+
+        let wrapperScriptURL = Self.wrapperScriptURL(launchDir: launchDir)
+        let modeFileURL = Self.modeFileURL(launchDir: launchDir)
 
         try Self.wrapperScript(gameDir: gameDir).write(to: wrapperScriptURL, atomically: true, encoding: .utf8)
         try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: wrapperScriptURL.path)

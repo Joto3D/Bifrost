@@ -1,0 +1,173 @@
+import SwiftUI
+import AppKit
+
+/// Settings tab: read-only paths Bifrost cares about (with a way to reveal
+/// each in Finder), one-off maintenance actions, and an About footer.
+struct SettingsView: View {
+    private enum IndexRefreshState: Equatable {
+        case idle
+        case running
+        case done(count: Int)
+        case failed(String)
+    }
+
+    @Environment(AppState.self) private var appState
+    @State private var indexRefreshState: IndexRefreshState = .idle
+
+    var body: some View {
+        Form {
+            Section("Paths") {
+                pathRow(title: "Valheim game folder", url: appState.status.gameFound)
+                pathRow(title: "Bifrost app support folder", url: bifrostSupportDir)
+                pathRow(title: "Launch wrapper script", url: wrapperScriptURL)
+                pathRow(title: "Steam launch config (localconfig.vdf)", url: SteamConfigurator.realLocalConfigURL())
+            }
+
+            Section("Setup") {
+                Button {
+                    appState.setupWizardPresented = true
+                } label: {
+                    Label("Run Setup Wizard", systemImage: "wand.and.stars")
+                }
+            }
+
+            Section("Maintenance") {
+                HStack(spacing: 10) {
+                    Button {
+                        Task { await refreshThunderstoreIndex() }
+                    } label: {
+                        Label("Refresh Thunderstore Index", systemImage: "arrow.triangle.2.circlepath")
+                    }
+                    .disabled(indexRefreshState == .running)
+
+                    if indexRefreshState == .running {
+                        ProgressView()
+                            .controlSize(.small)
+                    }
+
+                    switch indexRefreshState {
+                    case .done(let count):
+                        Text("\(count) packages")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    case .failed(let message):
+                        Text(message)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    case .idle, .running:
+                        EmptyView()
+                    }
+                }
+
+                Button {
+                    if let gameDir = appState.status.gameFound {
+                        Launcher.openBepInExLog(gameDir: gameDir)
+                    }
+                } label: {
+                    Label("Open BepInEx Log", systemImage: "doc.text")
+                }
+                .disabled(appState.status.gameFound == nil)
+
+                Button {
+                    Launcher.openWrapperLog()
+                } label: {
+                    Label("Open Wrapper Log", systemImage: "doc.text.below.ecg")
+                }
+
+                Button {
+                    if let gameDir = appState.status.gameFound {
+                        Launcher.openPluginsFolder(gameDir: gameDir)
+                    }
+                } label: {
+                    Label("Open Plugins Folder", systemImage: "folder")
+                }
+                .disabled(appState.status.gameFound == nil)
+            }
+
+            Section {
+                aboutFooter
+            }
+        }
+        .formStyle(.grouped)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    // MARK: - Paths
+
+    private var bifrostSupportDir: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/Bifrost")
+    }
+
+    private var wrapperScriptURL: URL {
+        BepInExInstaller.wrapperScriptURL(launchDir: BepInExInstaller.defaultLaunchDir)
+    }
+
+    @ViewBuilder
+    private func pathRow(title: String, url: URL?) -> some View {
+        HStack(alignment: .top) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.subheadline.weight(.medium))
+                Text(url?.path ?? "Not found")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            }
+            Spacer()
+            Button("Reveal in Finder") {
+                if let url { revealInFinder(url) }
+            }
+            .disabled(!canReveal(url))
+        }
+        .padding(.vertical, 2)
+    }
+
+    private func canReveal(_ url: URL?) -> Bool {
+        guard let url else { return false }
+        let fm = FileManager.default
+        return fm.fileExists(atPath: url.path) || fm.fileExists(atPath: url.deletingLastPathComponent().path)
+    }
+
+    private func revealInFinder(_ url: URL) {
+        if FileManager.default.fileExists(atPath: url.path) {
+            NSWorkspace.shared.activateFileViewerSelecting([url])
+        } else {
+            NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: url.deletingLastPathComponent().path)
+        }
+    }
+
+    // MARK: - Maintenance actions
+
+    private func refreshThunderstoreIndex() async {
+        indexRefreshState = .running
+        let client = ThunderstoreClient()
+        do {
+            let packages = try await client.fetchIndex(force: true)
+            indexRefreshState = .done(count: packages.count)
+        } catch {
+            indexRefreshState = .failed(error.localizedDescription)
+        }
+    }
+
+    // MARK: - About
+
+    private var aboutFooter: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Bifrost \(appVersion)")
+                .font(.headline)
+            Text("Launches Valheim through Steam with BepInEx mods on Apple Silicon.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 4)
+    }
+
+    private var appVersion: String {
+        if let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String, !version.isEmpty {
+            return version
+        }
+        return "dev"
+    }
+}
