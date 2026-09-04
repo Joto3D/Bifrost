@@ -10,8 +10,12 @@ import Foundation
 /// developer's real machine: it never launches Valheim, never opens a
 /// `steam://` URL, never quits or reconfigures the real running Steam
 /// unless its launch options are already exactly what Bifrost wants (in
-/// which case that's a deliberate no-op), and never installs BepInEx
-/// anywhere but a throwaway temp directory.
+/// which case that's a deliberate no-op), never installs BepInEx anywhere
+/// but a throwaway temp directory, and never installs, uninstalls, toggles,
+/// or otherwise mutates mods in the real game directory or real manifest —
+/// the mod-manager and profiles sections exercise `ModManager`/`ProfileStore`
+/// entirely against temp fixtures, touching the real install (if any) only
+/// through read-only dry-run calls.
 enum DebugCheck {
     /// If `--check` was passed on the command line, runs diagnostics and
     /// exits the process. Returns normally (a no-op) otherwise, so callers
@@ -89,11 +93,15 @@ enum DebugCheck {
 
         print("")
         print("== Mod manager ==")
-        await checkModManager(realGameDir: located?.directory, modManager: modManager)
+        await checkModManager(realGameDir: located?.directory, realModManager: modManager)
 
         print("")
         print("== Wizard simulation (fresh-machine) ==")
         await checkWizardSimulation()
+
+        print("")
+        print("== Profiles ==")
+        await checkProfiles()
     }
 
     // MARK: - Safety guard
@@ -458,17 +466,28 @@ enum DebugCheck {
 
     // MARK: - Mod manager
 
-    /// Exercises `ModManager` end to end against the REAL game directory:
-    /// install a simple no-dep mod, install a mod with a Jotunn dependency
-    /// (verifying auto-resolution and the loader special case), toggle
-    /// enabled state, uninstall the first mod, and re-verify the
-    /// update-detection fix now that a loader version is on record. Leaves
-    /// the real install with Jotunn + its dependent mod installed and
-    /// enabled, and the first mod removed — see the task notes for why.
-    private static func checkModManager(realGameDir: URL?, modManager: ModManager) async {
-        guard let gameDir = realGameDir else {
-            print("skipped: no game dir located")
-            return
+    /// Exercises `ModManager` end to end against a throwaway TEMP fixture
+    /// (fake game dir + fake manifest + fake launch dir, all under the
+    /// system temp directory and guarded by `assertUnderTempDir`): install a
+    /// simple no-dep mod, install a mod with a Jotunn dependency (verifying
+    /// auto-resolution and the loader special case), toggle enabled state,
+    /// uninstall the first mod. The REAL game dir is only ever read from —
+    /// a dry-run of the update-detection fix, no installs/uninstalls/writes.
+    ///
+    /// This used to run every step directly against the REAL Steam install
+    /// (a `--check` on this dev machine had, at one point, silently
+    /// reinstalled mods that had been deliberately removed through the
+    /// app). Nothing here touches the real install any more.
+    private static func checkModManager(realGameDir: URL?, realModManager: ModManager) async {
+        print("(read-only) update-detection dry-run against the REAL game dir:")
+        if let realGameDir {
+            let loaderVersion = await realModManager.loaderVersion()
+            let dryRunActions = await BepInExInstaller().dryRun(gameDir: realGameDir, launchDir: BepInExInstaller.defaultLaunchDir, manifestVersion: loaderVersion)
+            for action in dryRunActions { print("  - \(action)") }
+            let claimsPendingUpdate = dryRunActions.contains { $0.hasPrefix("Update BepInEx pack") }
+            print("  claims a pending loader update: \(claimsPendingUpdate)")
+        } else {
+            print("  skipped: no real game dir located")
         }
 
         let thunderstoreClient = ThunderstoreClient()
@@ -477,30 +496,29 @@ enum DebugCheck {
             return
         }
 
-        // Step 0: this dev machine has BepInExPack_Valheim 5.4.2333 on disk
-        // from an earlier manual spike, installed before Bifrost's manifest
-        // existed, so there's no record of it. Seed one — exactly what
-        // ModManager.install(loader) would have recorded had the pack been
-        // installed through Bifrost — so the update-detection fix (above)
-        // has something real to compare against.
-        if await modManager.loaderVersion() == nil, await BepInExInstaller().status(gameDir: gameDir, launchDir: BepInExInstaller.defaultLaunchDir).packFilesPresent {
-            print("NOTE: seeding manifest loader version to 5.4.2333 — pre-existing manual BepInEx install on this dev machine, no prior manifest record")
-            try? await modManager.setLoaderVersion("5.4.2333")
+        let fm = FileManager.default
+        let fakeGameDir = fm.temporaryDirectory.appendingPathComponent("BifrostCheck-modmanager-game-\(UUID().uuidString)")
+        let fakeManifestURL = fm.temporaryDirectory.appendingPathComponent("BifrostCheck-modmanager-manifest-\(UUID().uuidString).json")
+        let fakeLaunchDir = fm.temporaryDirectory.appendingPathComponent("BifrostCheck-modmanager-launch-\(UUID().uuidString)")
+        assertUnderTempDir(fakeGameDir, label: "mod manager fakeGameDir")
+        assertUnderTempDir(fakeManifestURL, label: "mod manager fakeManifestURL")
+        assertUnderTempDir(fakeLaunchDir, label: "mod manager fakeLaunchDir")
+        defer {
+            try? fm.removeItem(at: fakeGameDir)
+            try? fm.removeItem(at: fakeManifestURL)
+            try? fm.removeItem(at: fakeLaunchDir)
         }
+        let modManager = ModManager(manifestURL: fakeManifestURL, launchDir: fakeLaunchDir)
 
         print("")
-        print("6) update-detection fix, re-checked now that a loader version is on record:")
-        let loaderVersion = await modManager.loaderVersion()
-        let dryRunActions = await BepInExInstaller().dryRun(gameDir: gameDir, launchDir: BepInExInstaller.defaultLaunchDir, manifestVersion: loaderVersion)
-        for action in dryRunActions { print("  - \(action)") }
-        let claimsPendingUpdate = dryRunActions.contains { $0.hasPrefix("Update BepInEx pack") }
-        print("  claims a pending loader update: \(claimsPendingUpdate) -> \(claimsPendingUpdate ? "FAIL" : "PASS")")
+        print("fixture: fake game dir \(fakeGameDir.path)")
+        print("fixture: fake manifest \(fakeManifestURL.path)")
 
         print("")
         print("1) install Advize-PlantEverything (simple, no plugin deps beyond the loader):")
-        await installAndVerify(fullName: "Advize-PlantEverything", index: index, gameDir: gameDir, modManager: modManager) { resolved in
+        await installAndVerify(fullName: "Advize-PlantEverything", index: index, gameDir: fakeGameDir, modManager: modManager) { resolved in
             let dllPresent = FileManager.default.fileExists(
-                atPath: gameDir.appendingPathComponent("BepInEx/plugins/Advize-PlantEverything/Advize_PlantEverything.dll").path
+                atPath: fakeGameDir.appendingPathComponent("BepInEx/plugins/Advize-PlantEverything/Advize_PlantEverything.dll").path
             )
             let manifestHasIt = await modManager.isInstalled(fullName: "Advize-PlantEverything")
             print("  dll present under BepInEx/plugins/Advize-PlantEverything/: \(dllPresent)")
@@ -510,7 +528,7 @@ enum DebugCheck {
 
         print("")
         print("2) install RandyKnapp-EquipmentAndQuickSlots (depends on Jotunn + the loader):")
-        await installAndVerify(fullName: "RandyKnapp-EquipmentAndQuickSlots", index: index, gameDir: gameDir, modManager: modManager) { resolved in
+        await installAndVerify(fullName: "RandyKnapp-EquipmentAndQuickSlots", index: index, gameDir: fakeGameDir, modManager: modManager) { resolved in
             let loaderCount = resolved.filter { if case .loader = $0 { return true }; return false }.count
             let jotunnInstalled = await modManager.isInstalled(fullName: "ValheimModding-Jotunn")
             let eqsInstalled = await modManager.isInstalled(fullName: "RandyKnapp-EquipmentAndQuickSlots")
@@ -525,15 +543,15 @@ enum DebugCheck {
         print("")
         print("3) setEnabled(false) then setEnabled(true) on Advize-PlantEverything:")
         do {
-            try await modManager.setEnabled(fullName: "Advize-PlantEverything", enabled: false, gameDir: gameDir)
+            try await modManager.setEnabled(fullName: "Advize-PlantEverything", enabled: false, gameDir: fakeGameDir)
             let disabledPresent = FileManager.default.fileExists(
-                atPath: gameDir.appendingPathComponent("BepInEx/plugins/Advize-PlantEverything/Advize_PlantEverything.dll.disabled").path
+                atPath: fakeGameDir.appendingPathComponent("BepInEx/plugins/Advize-PlantEverything/Advize_PlantEverything.dll.disabled").path
             )
             print("  after disable, .dll.disabled present: \(disabledPresent)")
 
-            try await modManager.setEnabled(fullName: "Advize-PlantEverything", enabled: true, gameDir: gameDir)
+            try await modManager.setEnabled(fullName: "Advize-PlantEverything", enabled: true, gameDir: fakeGameDir)
             let enabledPresent = FileManager.default.fileExists(
-                atPath: gameDir.appendingPathComponent("BepInEx/plugins/Advize-PlantEverything/Advize_PlantEverything.dll").path
+                atPath: fakeGameDir.appendingPathComponent("BepInEx/plugins/Advize-PlantEverything/Advize_PlantEverything.dll").path
             )
             print("  after re-enable, .dll present: \(enabledPresent)")
             print("  -> \((disabledPresent && enabledPresent) ? "PASS" : "FAIL")")
@@ -544,12 +562,12 @@ enum DebugCheck {
         print("")
         print("4) uninstall Advize-PlantEverything — Jotunn/EquipmentAndQuickSlots must be untouched:")
         do {
-            try await modManager.uninstall(fullName: "Advize-PlantEverything", gameDir: gameDir)
-            let dirGone = !FileManager.default.fileExists(atPath: gameDir.appendingPathComponent("BepInEx/plugins/Advize-PlantEverything").path)
+            try await modManager.uninstall(fullName: "Advize-PlantEverything", gameDir: fakeGameDir)
+            let dirGone = !FileManager.default.fileExists(atPath: fakeGameDir.appendingPathComponent("BepInEx/plugins/Advize-PlantEverything").path)
             let manifestGone = await !modManager.isInstalled(fullName: "Advize-PlantEverything")
             let jotunnStillInstalled = await modManager.isInstalled(fullName: "ValheimModding-Jotunn")
             let eqsStillInstalled = await modManager.isInstalled(fullName: "RandyKnapp-EquipmentAndQuickSlots")
-            let jotunnFilesPresent = FileManager.default.fileExists(atPath: gameDir.appendingPathComponent("BepInEx/plugins/ValheimModding-Jotunn/Jotunn.dll").path)
+            let jotunnFilesPresent = FileManager.default.fileExists(atPath: fakeGameDir.appendingPathComponent("BepInEx/plugins/ValheimModding-Jotunn/Jotunn.dll").path)
             print("  BepInEx/plugins/Advize-PlantEverything/ removed: \(dirGone)")
             print("  manifest entry removed: \(manifestGone)")
             print("  Jotunn untouched (manifest / disk): \(jotunnStillInstalled) / \(jotunnFilesPresent)")
@@ -561,7 +579,7 @@ enum DebugCheck {
         }
 
         print("")
-        print("5) final state (expected: Jotunn + EquipmentAndQuickSlots installed & enabled, PlantEverything gone):")
+        print("5) final fixture state (expected: Jotunn + EquipmentAndQuickSlots installed & enabled, PlantEverything gone):")
         let finalManifest = await modManager.loadManifest()
         print("  loader: \(finalManifest.loader?.version ?? "nil")")
         for mod in finalManifest.mods.sorted(by: { $0.fullName < $1.fullName }) {
@@ -671,6 +689,208 @@ enum DebugCheck {
 
         print("")
         print("step 4) Done — overall wizard simulation: \((bepinexStepPassed && vdfStepPassed) ? "PASS" : "FAIL")")
+    }
+
+    // MARK: - Profiles
+
+    /// Exercises `ProfileStore` end to end against a throwaway TEMP fixture
+    /// (fake game dir with dummy `.dll` files + temp manifest + temp
+    /// profiles.json, all under the system temp directory and guarded by
+    /// `assertUnderTempDir`) — never the real manifest or profiles.json:
+    /// first-run migration, full CRUD, `apply`'s three reconcile cases
+    /// (enable, disable-not-in-profile, missing), manual-edit sync, and the
+    /// delete-active guard.
+    private static func checkProfiles() async {
+        let fm = FileManager.default
+        let fakeGameDir = fm.temporaryDirectory.appendingPathComponent("BifrostCheck-profiles-game-\(UUID().uuidString)")
+        let fakeManifestURL = fm.temporaryDirectory.appendingPathComponent("BifrostCheck-profiles-manifest-\(UUID().uuidString).json")
+        let fakeLaunchDir = fm.temporaryDirectory.appendingPathComponent("BifrostCheck-profiles-launch-\(UUID().uuidString)")
+        let fakeProfilesURL = fm.temporaryDirectory.appendingPathComponent("BifrostCheck-profiles-\(UUID().uuidString).json")
+        let fakeProfilesURL2 = fm.temporaryDirectory.appendingPathComponent("BifrostCheck-profiles2-\(UUID().uuidString).json")
+        assertUnderTempDir(fakeGameDir, label: "profiles fakeGameDir")
+        assertUnderTempDir(fakeManifestURL, label: "profiles fakeManifestURL")
+        assertUnderTempDir(fakeLaunchDir, label: "profiles fakeLaunchDir")
+        assertUnderTempDir(fakeProfilesURL, label: "profiles fakeProfilesURL")
+        assertUnderTempDir(fakeProfilesURL2, label: "profiles fakeProfilesURL2")
+        defer {
+            try? fm.removeItem(at: fakeGameDir)
+            try? fm.removeItem(at: fakeManifestURL)
+            try? fm.removeItem(at: fakeLaunchDir)
+            try? fm.removeItem(at: fakeProfilesURL)
+            try? fm.removeItem(at: fakeProfilesURL2)
+        }
+
+        // Fixture manifest: three installed mods (A, B enabled; C
+        // disabled), each with a real dummy .dll file on disk so
+        // `setEnabled`'s file-rename logic has something to move.
+        let fixtureManifest = InstalledManifest(
+            loader: .init(version: "5.4.2333"),
+            mods: [
+                .init(fullName: "Fixture-ModA", version: "1.0.0", enabled: true, files: ["BepInEx/plugins/Fixture-ModA/ModA.dll"]),
+                .init(fullName: "Fixture-ModB", version: "1.0.0", enabled: true, files: ["BepInEx/plugins/Fixture-ModB/ModB.dll"]),
+                .init(fullName: "Fixture-ModC", version: "1.0.0", enabled: false, files: ["BepInEx/plugins/Fixture-ModC/ModC.dll.disabled"]),
+            ]
+        )
+        do {
+            for mod in fixtureManifest.mods {
+                for relativePath in mod.files {
+                    let url = fakeGameDir.appendingPathComponent(relativePath)
+                    try fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+                    try Data("dummy".utf8).write(to: url)
+                }
+            }
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            try fm.createDirectory(at: fakeManifestURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try encoder.encode(fixtureManifest).write(to: fakeManifestURL)
+        } catch {
+            print("skipped: could not build fixture: \(error)")
+            return
+        }
+
+        let fixtureModManager = ModManager(manifestURL: fakeManifestURL, launchDir: fakeLaunchDir)
+        let store = ProfileStore(profilesURL: fakeProfilesURL, modManager: fixtureModManager)
+
+        print("fixture: fake game dir \(fakeGameDir.path)")
+        print("fixture: fake manifest \(fakeManifestURL.path)")
+        print("fixture: fake profiles.json \(fakeProfilesURL.path)")
+
+        print("")
+        print("1) first-run migration creates \"Default\" from current manifest state:")
+        let migrated = await store.loadOrMigrate()
+        let defaultProfile = migrated.profiles.first
+        let migrationOK = migrated.profiles.count == 1
+            && defaultProfile?.name == "Default"
+            && migrated.activeProfileID == defaultProfile?.id
+            && defaultProfile?.mods.sorted(by: { $0.fullName < $1.fullName }) == [
+                .init(fullName: "Fixture-ModA", enabled: true),
+                .init(fullName: "Fixture-ModB", enabled: true),
+                .init(fullName: "Fixture-ModC", enabled: false),
+            ]
+        print("  profiles=\(migrated.profiles.count) name=\(defaultProfile?.name ?? "nil") active=\(migrated.activeProfileID == defaultProfile?.id) mods=\(defaultProfile?.mods.count ?? -1)")
+        print("  -> \(migrationOK ? "PASS" : "FAIL")")
+        guard let defaultProfile else {
+            print("ABORT: no default profile to continue from")
+            return
+        }
+
+        print("")
+        print("2) create empty + create-from-current:")
+        let emptyProfile = await store.create(name: "Empty", fromCurrent: false)
+        let fromCurrentProfile = await store.create(name: "FromCurrent", fromCurrent: true)
+        let createOK = emptyProfile.mods.isEmpty && fromCurrentProfile.mods.count == 3
+        print("  Empty.mods=\(emptyProfile.mods.count) FromCurrent.mods=\(fromCurrentProfile.mods.count)")
+        print("  -> \(createOK ? "PASS" : "FAIL")")
+
+        print("")
+        print("3) duplicate + rename:")
+        var duplicateOK = false
+        var renameOK = false
+        do {
+            let duplicated = try await store.duplicate(id: defaultProfile.id, newName: "Default Copy")
+            duplicateOK = duplicated.id != defaultProfile.id && duplicated.mods == defaultProfile.mods
+            print("  duplicated \"Default Copy\": mods match Default=\(duplicated.mods == defaultProfile.mods), distinct id=\(duplicated.id != defaultProfile.id)")
+
+            try await store.rename(id: emptyProfile.id, to: "Renamed")
+            let afterRename = await store.load()
+            renameOK = afterRename.profiles.first { $0.id == emptyProfile.id }?.name == "Renamed"
+            print("  renamed Empty -> Renamed: \(renameOK)")
+        } catch {
+            print("  FAILED: \(error)")
+        }
+        print("  -> \((duplicateOK && renameOK) ? "PASS" : "FAIL")")
+
+        print("")
+        print("4) delete-active guard + delete a non-active profile:")
+        var deleteGuardOK = false
+        do {
+            try await store.delete(id: defaultProfile.id)
+            print("  delete(active Default) unexpectedly succeeded")
+        } catch ProfileStore.ProfileStoreError.cannotDeleteActive {
+            deleteGuardOK = true
+            print("  delete(active Default) correctly refused")
+        } catch {
+            print("  delete(active Default) failed with unexpected error: \(error)")
+        }
+        var deleteNonActiveOK = false
+        do {
+            try await store.delete(id: emptyProfile.id) // now named "Renamed", not active
+            let afterDelete = await store.load()
+            deleteNonActiveOK = !afterDelete.profiles.contains { $0.id == emptyProfile.id }
+            print("  delete(non-active Renamed) removed it: \(deleteNonActiveOK)")
+        } catch {
+            print("  delete(non-active Renamed) FAILED: \(error)")
+        }
+        print("  -> \((deleteGuardOK && deleteNonActiveOK) ? "PASS" : "FAIL")")
+
+        print("")
+        print("5) apply — all three reconcile cases (enable / disable-not-in-profile / missing):")
+        // Hand-authored profile (bypassing create/duplicate, which can only
+        // ever copy current state or start empty): wants ModA (already
+        // enabled, stays), ModC (installed but disabled, gets enabled), and
+        // ModD (not installed at all, -> missing). ModB is deliberately
+        // left out, so it should get disabled.
+        let targetProfile = Profile(
+            id: UUID(),
+            name: "Target",
+            mods: [
+                .init(fullName: "Fixture-ModA", enabled: true),
+                .init(fullName: "Fixture-ModC", enabled: true),
+                .init(fullName: "Fixture-ModD", enabled: true),
+            ]
+        )
+        var applyOK = false
+        do {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            try encoder.encode(ProfilesFile(activeProfileID: nil, profiles: [targetProfile])).write(to: fakeProfilesURL2)
+            let store2 = ProfileStore(profilesURL: fakeProfilesURL2, modManager: fixtureModManager)
+
+            let result = try await store2.apply(profileID: targetProfile.id, gameDir: fakeGameDir)
+            let missingOK = result.missing == ["Fixture-ModD"]
+
+            let manifestAfter = await fixtureModManager.loadManifest()
+            let modA = manifestAfter.mods.first { $0.fullName == "Fixture-ModA" }
+            let modB = manifestAfter.mods.first { $0.fullName == "Fixture-ModB" }
+            let modC = manifestAfter.mods.first { $0.fullName == "Fixture-ModC" }
+            let stateOK = modA?.enabled == true && modB?.enabled == false && modC?.enabled == true
+
+            let aDllPresent = fm.fileExists(atPath: fakeGameDir.appendingPathComponent("BepInEx/plugins/Fixture-ModA/ModA.dll").path)
+            let bDisabledPresent = fm.fileExists(atPath: fakeGameDir.appendingPathComponent("BepInEx/plugins/Fixture-ModB/ModB.dll.disabled").path)
+            let cDllPresent = fm.fileExists(atPath: fakeGameDir.appendingPathComponent("BepInEx/plugins/Fixture-ModC/ModC.dll").path)
+            let filesOK = aDllPresent && bDisabledPresent && cDllPresent
+
+            let afterApply = await store2.load()
+            let activeOK = afterApply.activeProfileID == targetProfile.id
+
+            applyOK = missingOK && stateOK && filesOK && activeOK
+            print("  missing=\(result.missing) (expect [\"Fixture-ModD\"]) -> \(missingOK)")
+            print("  enabled after: ModA=\(modA?.enabled.description ?? "nil") ModB=\(modB?.enabled.description ?? "nil") ModC=\(modC?.enabled.description ?? "nil") -> \(stateOK)")
+            print("  files after: ModA.dll=\(aDllPresent) ModB.dll.disabled=\(bDisabledPresent) ModC.dll=\(cDllPresent) -> \(filesOK)")
+            print("  activeProfileID == Target: \(activeOK)")
+
+            print("")
+            print("6) manual-edit sync — active profile follows a direct setEnabled() outside of apply():")
+            try await fixtureModManager.setEnabled(fullName: "Fixture-ModA", enabled: false, gameDir: fakeGameDir)
+            await store2.syncActiveProfile()
+            let afterSync = await store2.load()
+            let syncedTarget = afterSync.profiles.first { $0.id == targetProfile.id }
+            let syncedMods = Set(syncedTarget?.mods ?? [])
+            let expectedSyncedMods: Set<Profile.ProfileMod> = [
+                .init(fullName: "Fixture-ModA", enabled: false),
+                .init(fullName: "Fixture-ModB", enabled: false),
+                .init(fullName: "Fixture-ModC", enabled: true),
+            ]
+            let syncOK = syncedMods == expectedSyncedMods
+            print("  synced mods: \(syncedTarget?.mods.sorted(by: { $0.fullName < $1.fullName }) ?? [])")
+            print("  (ModD dropped since it's still not installed, ModA now disabled to match the manual edit)")
+            print("  -> \(syncOK ? "PASS" : "FAIL")")
+
+            print("")
+            print("(step 5 verdict) -> \(applyOK ? "PASS" : "FAIL")")
+        } catch {
+            print("  FAILED: \(error)")
+        }
     }
 
     /// Resolves and installs `fullName` against the real game dir, prints

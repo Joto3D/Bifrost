@@ -9,6 +9,7 @@ final class AppState {
     private(set) var status: SetupStatus = .unknown
     private(set) var isRefreshing = false
     private(set) var manifest: InstalledManifest = .empty
+    private(set) var profiles: ProfilesFile = .empty
 
     /// Drives `SetupWizardView`'s sheet from anywhere in the view
     /// hierarchy (`MainWindow` presents it automatically on first launch
@@ -21,6 +22,17 @@ final class AppState {
     var lastError: BifrostError?
 
     let modManager = ModManager()
+    let profileStore: ProfileStore
+
+    init() {
+        profileStore = ProfileStore(modManager: modManager)
+    }
+
+    /// The currently active profile, if any (`profiles.activeProfileID`
+    /// resolved against `profiles.profiles`).
+    var activeProfile: Profile? {
+        profiles.profiles.first { $0.id == profiles.activeProfileID }
+    }
 
     /// Re-runs every setup check. Filesystem checks are cheap and run
     /// inline; the Rosetta probe shells out, so it's the only truly async
@@ -50,6 +62,7 @@ final class AppState {
         )
 
         await refreshManifest()
+        await refreshProfiles()
     }
 
     /// Reloads the installed-mods manifest from disk. Called after
@@ -58,6 +71,61 @@ final class AppState {
     /// needing to pass state between them directly.
     func refreshManifest() async {
         manifest = await modManager.loadManifest()
+    }
+
+    /// Reloads `profiles.json` (auto-migrating a "Default" profile from the
+    /// current manifest on first run — see `ProfileStore.loadOrMigrate`).
+    func refreshProfiles() async {
+        profiles = await profileStore.loadOrMigrate()
+    }
+
+    /// Computes what applying `profileID` would do, without changing
+    /// anything — used to decide whether switching needs to confirm with
+    /// the user first (see `ProfileStore.previewApply`).
+    func previewApplyProfile(id: UUID) async throws -> ProfileStore.ApplyPreview {
+        try await profileStore.previewApply(profileID: id)
+    }
+
+    /// Applies `profileID` (see `ProfileStore.apply`): enables/disables
+    /// installed mods to match the profile's desired state, marks it
+    /// active, then refreshes both the manifest and the profiles list.
+    /// Returns the profile mods that aren't installed yet, for the caller
+    /// to offer installing.
+    @discardableResult
+    func applyProfile(id: UUID, gameDir: URL) async throws -> ProfileStore.ApplyResult {
+        let result = try await profileStore.apply(profileID: id, gameDir: gameDir)
+        await refreshManifest()
+        await refreshProfiles()
+        return result
+    }
+
+    /// Installs every mod in `fullNames` (each resolved via
+    /// `ModManager.resolve`/`install` so its own dependencies come along
+    /// too), then re-applies `profileID` so the newly-installed mods' state
+    /// ends up matching the profile. For the "Install missing (N)" action
+    /// offered after `applyProfile` reports mods the profile wants that
+    /// aren't installed yet.
+    @discardableResult
+    func installMissingAndReapply(
+        fullNames: [String],
+        profileID: UUID,
+        gameDir: URL,
+        index: [ThunderstorePackage]
+    ) async throws -> ProfileStore.ApplyResult {
+        for fullName in fullNames {
+            guard let package = index.first(where: { $0.fullName == fullName }) else { continue }
+            try await modManager.install(package: package, index: index, gameDir: gameDir)
+        }
+        return try await applyProfile(id: profileID, gameDir: gameDir)
+    }
+
+    /// Updates the active profile's mod list to match the manifest — call
+    /// after a manual install/uninstall/toggle from the Installed/Browse
+    /// tabs (see `ProfileStore.syncActiveProfile`), in addition to the
+    /// existing `refreshManifest()` those actions already do.
+    func syncActiveProfileWithManifest() async {
+        await profileStore.syncActiveProfile()
+        await refreshProfiles()
     }
 
     private static func checkRosetta() async -> Bool {

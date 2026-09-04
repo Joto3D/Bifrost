@@ -18,6 +18,7 @@ struct InstalledModsView: View {
     @State private var busyFullNames: Set<String> = []
     @State private var pendingRemoval: InstalledManifest.InstalledMod?
     @State private var statusLine: String?
+    @State private var profilesSheetPresented = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -27,6 +28,7 @@ struct InstalledModsView: View {
         }
         .task {
             await appState.refreshManifest()
+            await appState.refreshProfiles()
             await loadIndexAndCheckUpdates(force: false)
         }
         .confirmationDialog(
@@ -43,6 +45,9 @@ struct InstalledModsView: View {
             Button("Cancel", role: .cancel) {}
         } message: { mod in
             Text("Deletes \(mod.files.count) file\(mod.files.count == 1 ? "" : "s") from BepInEx. Config files are left alone.")
+        }
+        .sheet(isPresented: $profilesSheetPresented) {
+            ProfilesSheetView()
         }
     }
 
@@ -65,6 +70,12 @@ struct InstalledModsView: View {
                 Label("Check for Updates", systemImage: "arrow.triangle.2.circlepath")
             }
             .disabled(isCheckingUpdates)
+
+            Button {
+                profilesSheetPresented = true
+            } label: {
+                Label("Profiles…", systemImage: "person.2.crop.square.stack")
+            }
 
             Button {
                 if let gameDir = appState.status.gameFound {
@@ -146,6 +157,7 @@ struct InstalledModsView: View {
         do {
             try await appState.modManager.setEnabled(fullName: mod.fullName, enabled: enabled, gameDir: gameDir)
             await appState.refreshManifest()
+            await appState.syncActiveProfileWithManifest()
         } catch {
             statusLine = "Couldn't toggle \(mod.fullName): \(error.localizedDescription)"
         }
@@ -158,6 +170,7 @@ struct InstalledModsView: View {
         do {
             try await appState.modManager.update(fullName: mod.fullName, index: packages, gameDir: gameDir)
             await appState.refreshManifest()
+            await appState.syncActiveProfileWithManifest()
             updates.removeValue(forKey: mod.fullName)
         } catch {
             statusLine = "Couldn't update \(mod.fullName): \(error.localizedDescription)"
@@ -172,6 +185,7 @@ struct InstalledModsView: View {
         do {
             try await appState.modManager.uninstall(fullName: mod.fullName, gameDir: gameDir)
             await appState.refreshManifest()
+            await appState.syncActiveProfileWithManifest()
         } catch {
             statusLine = "Couldn't remove \(mod.fullName): \(error.localizedDescription)"
         }

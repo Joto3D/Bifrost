@@ -3,11 +3,29 @@ import SwiftUI
 /// Home tab content: shows the four setup prerequisites and, once wiring
 /// lands in a later phase, the actual play buttons.
 struct StatusPanel: View {
+    private struct PendingProfileSwitch: Identifiable {
+        let id = UUID()
+        let profileID: UUID
+        let preview: ProfileStore.ApplyPreview
+    }
+
+    private struct PendingMissingMods: Identifiable {
+        let id = UUID()
+        let profileID: UUID
+        let missing: [String]
+    }
+
     @Environment(AppState.self) private var appState
     @State private var launchStatusLine: String?
     @State private var diagnosticsTask: Task<Void, Never>?
     @State private var launchTask: Task<Void, Never>?
     @State private var isLaunching = false
+
+    @State private var thunderstoreClient = ThunderstoreClient()
+    @State private var isApplyingProfile = false
+    @State private var profileStatusLine: String?
+    @State private var pendingProfileSwitch: PendingProfileSwitch?
+    @State private var pendingMissingMods: PendingMissingMods?
 
     var body: some View {
         VStack(spacing: 24) {
@@ -50,6 +68,8 @@ struct StatusPanel: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
+
+            profileRow
 
             Button {
                 Task { await appState.refresh() }
@@ -134,6 +154,141 @@ struct StatusPanel: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .task {
             await appState.refresh()
+        }
+        .confirmationDialog(
+            "Switch profile?",
+            isPresented: Binding(
+                get: { pendingProfileSwitch != nil },
+                set: { if !$0 { pendingProfileSwitch = nil } }
+            ),
+            presenting: pendingProfileSwitch
+        ) { pending in
+            Button("Switch") {
+                Task { await performProfileSwitch(profileID: pending.profileID) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { pending in
+            Text(profileSwitchMessage(for: pending.preview))
+        }
+        .confirmationDialog(
+            "Install missing mods?",
+            isPresented: Binding(
+                get: { pendingMissingMods != nil },
+                set: { if !$0 { pendingMissingMods = nil } }
+            ),
+            presenting: pendingMissingMods
+        ) { pending in
+            Button("Install Missing (\(pending.missing.count))") {
+                Task { await installMissing(pending) }
+            }
+            Button("Not Now", role: .cancel) {}
+        } message: { pending in
+            Text("This profile also wants: \(pending.missing.joined(separator: ", "))")
+        }
+    }
+
+    private var profileRow: some View {
+        HStack(spacing: 8) {
+            Picker("Profile", selection: profileSelection) {
+                ForEach(appState.profiles.profiles.sorted(by: { $0.name < $1.name })) { profile in
+                    Text(profile.name).tag(profile.id as UUID?)
+                }
+            }
+            .labelsHidden()
+            .pickerStyle(.menu)
+            .frame(maxWidth: 200)
+            .disabled(appState.profiles.profiles.isEmpty || isApplyingProfile || appState.status.gameFound == nil)
+
+            if isApplyingProfile {
+                ProgressView().controlSize(.small)
+            }
+
+            if let profileStatusLine {
+                Text(profileStatusLine)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            } else {
+                Text(profileEnabledSummary)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+        }
+    }
+
+    private var profileSelection: Binding<UUID?> {
+        Binding(
+            get: { appState.profiles.activeProfileID },
+            set: { newID in
+                guard let newID, newID != appState.profiles.activeProfileID else { return }
+                Task { await requestProfileSwitch(to: newID) }
+            }
+        )
+    }
+
+    private var profileEnabledSummary: String {
+        guard let active = appState.activeProfile else { return "" }
+        let enabledCount = active.mods.filter { $0.enabled }.count
+        return "\(enabledCount) mod\(enabledCount == 1 ? "" : "s") enabled"
+    }
+
+    private func profileSwitchMessage(for preview: ProfileStore.ApplyPreview) -> String {
+        var lines: [String] = []
+        if !preview.toDisable.isEmpty {
+            lines.append("Will disable: \(preview.toDisable.joined(separator: ", "))")
+        }
+        if !preview.missing.isEmpty {
+            lines.append("Not installed yet: \(preview.missing.joined(separator: ", "))")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private func requestProfileSwitch(to profileID: UUID) async {
+        profileStatusLine = nil
+        do {
+            let preview = try await appState.previewApplyProfile(id: profileID)
+            if preview.isNoOp {
+                await performProfileSwitch(profileID: profileID)
+            } else {
+                pendingProfileSwitch = PendingProfileSwitch(profileID: profileID, preview: preview)
+            }
+        } catch {
+            profileStatusLine = "Couldn't preview profile switch: \(error.localizedDescription)"
+        }
+    }
+
+    private func performProfileSwitch(profileID: UUID) async {
+        guard let gameDir = appState.status.gameFound else { return }
+        isApplyingProfile = true
+        defer { isApplyingProfile = false }
+        do {
+            let result = try await appState.applyProfile(id: profileID, gameDir: gameDir)
+            if !result.missing.isEmpty {
+                pendingMissingMods = PendingMissingMods(profileID: profileID, missing: result.missing)
+            }
+        } catch {
+            profileStatusLine = "Couldn't switch profile: \(error.localizedDescription)"
+        }
+    }
+
+    private func installMissing(_ pending: PendingMissingMods) async {
+        guard let gameDir = appState.status.gameFound else { return }
+        isApplyingProfile = true
+        defer { isApplyingProfile = false }
+        do {
+            let index = try await thunderstoreClient.fetchIndex(force: false)
+            let result = try await appState.installMissingAndReapply(
+                fullNames: pending.missing,
+                profileID: pending.profileID,
+                gameDir: gameDir,
+                index: index
+            )
+            profileStatusLine = result.missing.isEmpty ? nil : "Still missing: \(result.missing.joined(separator: ", "))"
+        } catch {
+            profileStatusLine = "Couldn't install missing mods: \(error.localizedDescription)"
         }
     }
 

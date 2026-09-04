@@ -163,6 +163,7 @@ struct ModDetailView: View {
                 }
             }
             await appState.refreshManifest()
+            await appState.syncActiveProfileWithManifest()
             installState = .idle
         } catch {
             installState = .failed("Install failed: \(error.localizedDescription)")
