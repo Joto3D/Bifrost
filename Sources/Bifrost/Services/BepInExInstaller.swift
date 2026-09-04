@@ -335,6 +335,18 @@ actor BepInExInstaller {
         echo "$(date '+%F %T') mode=$MODE args=$*" >> "$LOG"
 
         if [ "$MODE" != "modded" ] || [ ! -x "$GAME_DIR/start_game_bepinex.sh" ]; then
+            # Steam passes the .app bundle path as %command% on macOS; a bundle
+            # directory cannot be exec'd, so resolve its inner executable first.
+            TARGET="$1"
+            case "$TARGET" in
+                *.app)
+                    INNER="$(defaults read "$TARGET/Contents/Info" CFBundleExecutable 2>/dev/null)"
+                    if [ -n "$INNER" ] && [ -x "$TARGET/Contents/MacOS/$INNER" ]; then
+                        shift
+                        exec "$TARGET/Contents/MacOS/$INNER" "$@"
+                    fi
+                ;;
+            esac
             exec "$@"
         fi
 
