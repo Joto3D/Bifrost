@@ -132,7 +132,15 @@ enum BepInExConfig {
         }
 
         for (index, rawLine) in lines.enumerated() {
-            let trimmed = rawLine.trimmingCharacters(in: .whitespaces)
+            // `.whitespacesAndNewlines` (not just `.whitespaces`) so a
+            // CRLF-terminated file — split on `"\n"` above, which leaves a
+            // trailing `"\r"` on every line — still classifies correctly:
+            // `.whitespaces` alone doesn't include the carriage-return
+            // control character, so `"[Section]\r"` would otherwise fail
+            // the `hasSuffix("]")` check below and silently drop the
+            // section (and, prior to this trim, `parseKeyValueLine`'s own
+            // trims had the same gap for keys/values).
+            let trimmed = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
 
             if trimmed.count >= 2, trimmed.hasPrefix("["), trimmed.hasSuffix("]") {
                 flushSection()
@@ -156,7 +164,7 @@ enum BepInExConfig {
                 continue
             }
             if let value = fieldValue(after: "# Acceptable values:", in: trimmed) {
-                pendingAcceptableValues = value.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+                pendingAcceptableValues = value.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
                 continue
             }
             if let value = fieldValue(after: "# Acceptable value range:", in: trimmed) {
@@ -180,7 +188,7 @@ enum BepInExConfig {
                 continue
             }
 
-            let description = pendingDescriptionLines.joined(separator: " ").trimmingCharacters(in: .whitespaces)
+            let description = pendingDescriptionLines.joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
             currentEntries.append(Entry(
                 section: currentSectionName!,
                 key: parsedLine.key,
@@ -206,6 +214,12 @@ enum BepInExConfig {
     /// unchanged (byte-identical round trip). Callers should only include
     /// entries whose value actually differs from what was parsed — an
     /// entry edited back to its original value should simply be omitted.
+    ///
+    /// Line indices are only stable against the exact text they were
+    /// parsed from — if `text` may have changed since those indices were
+    /// captured (e.g. the game rewrote the file while the editor was
+    /// open), use `applying(values:to:)` instead, which re-targets each
+    /// edit by (section, key) against `text` as it stands right now.
     static func applying(_ changes: [Int: String], to text: String) -> String {
         guard !changes.isEmpty else { return text }
         var lines = text.components(separatedBy: "\n")
@@ -214,6 +228,60 @@ enum BepInExConfig {
             lines[lineIndex] = "\(parsed.key) = \(newValue)"
         }
         return lines.joined(separator: "\n")
+    }
+
+    /// One user edit addressed by (section, key) identity rather than a
+    /// fixed line index — stays valid even if lines above it shifted or
+    /// the file was rewritten entirely, as long as that section/key still
+    /// exists somewhere in the target text.
+    struct KeyedChange: Sendable, Equatable {
+        let section: String
+        let key: String
+        let value: String
+    }
+
+    /// The result of a keyed `applying` pass.
+    struct KeyedApplyResult: Sendable, Equatable {
+        /// `text` with every still-existing change applied.
+        let text: String
+        /// Changes whose (section, key) could not be found in `text` —
+        /// e.g. the mod that owns that setting rewrote its config without
+        /// that key, or the section was renamed — and so were silently
+        /// dropped rather than applied. Surfaced here so the caller can
+        /// tell the user.
+        let skipped: [KeyedChange]
+    }
+
+    /// Conflict-safe counterpart to `applying(_:to:)`: re-parses `text` —
+    /// which may be a completely different snapshot of the file than
+    /// whatever `changes` were originally computed against (the whole
+    /// point: the game or another mod may have rewritten it since) — and
+    /// re-targets each change by (section, key) rather than trusting a
+    /// stale line index. Only edits whose (section, key) still exists in
+    /// `text` are applied; every entry untouched by `changes`, including
+    /// ones a concurrent external rewrite added or changed, is preserved
+    /// byte-for-byte exactly as `applying(_:to:)` already guarantees.
+    static func applying(values changes: [KeyedChange], to text: String) -> KeyedApplyResult {
+        guard !changes.isEmpty else { return KeyedApplyResult(text: text, skipped: []) }
+
+        let current = parse(text)
+        var lineIndexByID: [String: Int] = [:]
+        for entry in current.allEntries {
+            lineIndexByID[entry.id] = entry.lineIndex
+        }
+
+        var lineChanges: [Int: String] = [:]
+        var skipped: [KeyedChange] = []
+        for change in changes {
+            let id = "\(change.section)/\(change.key)"
+            if let lineIndex = lineIndexByID[id] {
+                lineChanges[lineIndex] = change.value
+            } else {
+                skipped.append(change)
+            }
+        }
+
+        return KeyedApplyResult(text: applying(lineChanges, to: text), skipped: skipped)
     }
 
     // MARK: - Discovery / association
@@ -279,7 +347,7 @@ enum BepInExConfig {
     /// type: Toggle")` -> `"Toggle"`.
     private static func fieldValue(after prefix: String, in line: String) -> String? {
         guard line.hasPrefix(prefix) else { return nil }
-        return String(line.dropFirst(prefix.count)).trimmingCharacters(in: .whitespaces)
+        return String(line.dropFirst(prefix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// A `Key = value` line's key and value, or `nil` if the line doesn't
@@ -290,9 +358,17 @@ enum BepInExConfig {
     /// (unescaped) `=` inside either.
     private static func parseKeyValueLine(_ line: String) -> (key: String, value: String)? {
         guard let equalsIndex = line.firstIndex(of: "=") else { return nil }
-        let key = line[line.startIndex..<equalsIndex].trimmingCharacters(in: .whitespaces)
+        let key = line[line.startIndex..<equalsIndex].trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { return nil }
-        let value = line[line.index(after: equalsIndex)...].trimmingCharacters(in: .whitespaces)
+        // `.whitespacesAndNewlines`, not just `.whitespaces`, so a
+        // CRLF-terminated line's trailing `"\r"` (left dangling by the
+        // `"\n"`-only split in `parse`/`applying`) doesn't end up glued
+        // onto the value — which would otherwise silently corrupt every
+        // comparison against it (`isBoolean`/`boolValue`, the "reset to
+        // default" equality check, `Picker` selection matching an
+        // `acceptableValues` entry) without ever surfacing as a parse
+        // failure.
+        let value = line[line.index(after: equalsIndex)...].trimmingCharacters(in: .whitespacesAndNewlines)
         return (key, value)
     }
 }

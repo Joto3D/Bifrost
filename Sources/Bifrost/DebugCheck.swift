@@ -1078,6 +1078,223 @@ enum DebugCheck {
         print("")
         print("7) README fetch (best effort, skips gracefully offline):")
         await checkReadmeFetch()
+
+        print("")
+        print("8) keyed application — conflict-safe save onto an externally-rewritten copy:")
+        checkKeyedApplication()
+
+        print("")
+        print("9) multi-file round-trip sweep (every real .cfg, temp copies only):")
+        await checkConfigRoundTripSweep(realConfigDir: realConfigDir)
+
+        print("")
+        print("10) CRLF tolerance (none of this machine's real cfgs use it, so an embedded fixture):")
+        checkCRLFTolerance()
+    }
+
+    /// None of this developer's real `.cfg` files use CRLF line endings
+    /// (checked: all are bare `\n`), but nothing guarantees every mod
+    /// author's config template stays that way, and `parse` splits on
+    /// `"\n"` alone — which used to leave a dangling `"\r"` on every line
+    /// that `.whitespaces` trimming (as opposed to `.whitespacesAndNewlines`)
+    /// didn't strip, corrupting section names, keys, and values alike.
+    /// Embedded fixture, since a real CRLF file isn't available to test
+    /// against.
+    private static func checkCRLFTolerance() {
+        let crlfText = "[General]\r\n\r\n## A CRLF-terminated description.\r\n# Setting type: Boolean\r\n# Default value: false\r\nEnabled = true\r\n"
+        let parsed = BepInExConfig.parse(crlfText)
+        let entry = parsed.allEntries.first { $0.key == "Enabled" }
+        let sectionOK = parsed.sections.first?.name == "General"
+        let keyOK = entry?.key == "Enabled"
+        let valueOK = entry?.rawValue == "true"
+        let boolValueOK = entry?.boolValue == true
+        let descriptionOK = entry?.description == "A CRLF-terminated description."
+        let pass = sectionOK && keyOK && valueOK && boolValueOK && descriptionOK
+        print("  section name (no stray \\r): \"\(parsed.sections.first?.name ?? "nil")\" (expect \"General\") -> \(sectionOK)")
+        print("  key (no stray \\r): \"\(entry?.key ?? "nil")\" (expect \"Enabled\") -> \(keyOK)")
+        print("  value (no stray \\r): \"\(entry?.rawValue ?? "nil")\" (expect \"true\") -> \(valueOK)")
+        print("  boolValue resolves despite CRLF: \(entry?.boolValue.map(String.init) ?? "nil") (expect true) -> \(boolValueOK)")
+        print("  description (no stray \\r): \"\(entry?.description ?? "nil")\" -> \(descriptionOK)")
+        print("  -> \(pass ? "PASS" : "FAIL")")
+    }
+
+    /// Exercises `BepInExConfig.applying(values:to:)` — the fix for the
+    /// stale-write race where a mod rewrites its `.cfg` on game exit
+    /// between when `ConfigEditorView` read the file and when the user
+    /// hits Save. Simulates that exact sequence with embedded fixtures
+    /// (no real files touched): the editor opens `originalText`, the user
+    /// edits one setting, then — before they save — an external rewrite
+    /// (a) changes an unrelated setting's value, (b) inserts a brand-new
+    /// section+setting that didn't exist when the editor opened (so line
+    /// indices no longer line up at all), and (c) removes a setting the
+    /// user never touched but a stale second edit still references.
+    /// Asserts: the user's edit lands, the external changes both survive
+    /// untouched, and the edit targeting the now-vanished setting is
+    /// reported as skipped rather than silently dropped or crashing.
+    private static func checkKeyedApplication() {
+        let originalText = """
+        [General]
+
+        ## The field of view to use while first person mode is active.
+        # Setting type: Single
+        # Default value: 65
+        Default FOV = 65
+
+        [Other]
+
+        ## Whether the feature is enabled.
+        # Setting type: Boolean
+        # Default value: false
+        Enabled = false
+
+        ## A setting that will vanish in the external rewrite below.
+        # Setting type: Boolean
+        # Default value: false
+        Temporary = false
+        """
+
+        // What the game/mod wrote to disk after the editor opened but
+        // before the user saved: "Enabled" flipped to true (external
+        // change to a setting the user didn't touch), a brand-new
+        // "New Toggle" setting inserted above it (shifts every following
+        // line index), and "Temporary" removed entirely.
+        let externallyRewrittenText = """
+        [General]
+
+        ## The field of view to use while first person mode is active.
+        # Setting type: Single
+        # Default value: 65
+        Default FOV = 65
+
+        [Other]
+
+        ## Whether the feature is enabled.
+        # Setting type: Boolean
+        # Default value: false
+        Enabled = true
+
+        ## Newly added by the mod itself on this run.
+        # Setting type: Boolean
+        # Default value: false
+        New Toggle = true
+        """
+
+        let parsedOriginal = BepInExConfig.parse(originalText)
+        guard let fovEntry = parsedOriginal.allEntries.first(where: { $0.key == "Default FOV" }) else {
+            print("  FAILED: could not find \"Default FOV\" in the fixture")
+            return
+        }
+
+        // The user's pending edits, computed against the ORIGINAL
+        // (now-stale) snapshot — exactly what `ConfigEditorView.save()`
+        // has in `editedValues` at save time: one edit to a setting that
+        // still exists ("Default FOV"), one to a setting that no longer
+        // does ("Temporary").
+        let userEdits = [
+            BepInExConfig.KeyedChange(section: fovEntry.section, key: fovEntry.key, value: "90"),
+            BepInExConfig.KeyedChange(section: "Other", key: "Temporary", value: "true"),
+        ]
+
+        let result = BepInExConfig.applying(values: userEdits, to: externallyRewrittenText)
+
+        let userEditLanded = result.text.contains("Default FOV = 90")
+        let externalValueChangeSurvived = result.text.contains("Enabled = true")
+        let externalInsertionSurvived = result.text.contains("New Toggle = true")
+        let vanishedKeyNotWritten = !result.text.contains("Temporary")
+        let skippedReportedCorrectly = result.skipped == [
+            BepInExConfig.KeyedChange(section: "Other", key: "Temporary", value: "true"),
+        ]
+        // Nothing else in the externally-rewritten text should have moved
+        // — same byte-for-byte-preservation guarantee as the line-indexed
+        // `applying(_:to:)`, just re-targeted.
+        let reparsed = BepInExConfig.parse(result.text)
+        let otherEntriesUntouched = reparsed.allEntries.filter { $0.key != "Default FOV" }
+            == BepInExConfig.parse(externallyRewrittenText).allEntries.filter { $0.key != "Default FOV" }
+
+        let pass = userEditLanded && externalValueChangeSurvived && externalInsertionSurvived
+            && vanishedKeyNotWritten && skippedReportedCorrectly && otherEntriesUntouched
+
+        print("  user edit (Default FOV -> 90) landed onto the rewritten copy: \(userEditLanded)")
+        print("  external value change (Enabled -> true) survived: \(externalValueChangeSurvived)")
+        print("  external insertion (New Toggle, shifts line indices) survived: \(externalInsertionSurvived)")
+        print("  vanished-key edit (Temporary) not written: \(vanishedKeyNotWritten)")
+        print("  skipped = \(result.skipped.map { "\($0.section)/\($0.key)" }) (expect [\"Other/Temporary\"]) -> \(skippedReportedCorrectly)")
+        print("  every other entry preserved byte-for-byte: \(otherEntriesUntouched)")
+        print("  -> \(pass ? "PASS" : "FAIL")")
+    }
+
+    /// Round-trip-tests `BepInExConfig.parse`/`applying` against a TEMP
+    /// copy (guarded by `assertUnderTempDir`) of every `.cfg` file
+    /// currently in the real config dir — not just one fixture file. For
+    /// each: parses it, counts entries, cross-checks that count against an
+    /// independent `grep`-based baseline (`^[^#\[].* = `: any non-comment,
+    /// non-section-header line containing " = " — i.e. every `Key = value`
+    /// line BepInEx's own format can produce, including empty-value
+    /// entries), and verifies a zero-change round trip is byte-identical.
+    /// A mismatched entry count means the parser silently dropped (or
+    /// double-counted) something real-world — exactly the "a setting was
+    /// missing" failure mode this whole fix exists for.
+    private static func checkConfigRoundTripSweep(realConfigDir: URL) async {
+        guard let cfgFiles = try? FileManager.default.contentsOfDirectory(at: realConfigDir, includingPropertiesForKeys: nil)
+            .filter({ $0.pathExtension.lowercased() == "cfg" })
+            .sorted(by: { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending })
+        else {
+            print("  skipped: could not list \(realConfigDir.path)")
+            return
+        }
+        guard !cfgFiles.isEmpty else {
+            print("  skipped: no .cfg files found in \(realConfigDir.path)")
+            return
+        }
+
+        let fm = FileManager.default
+        let tempDir = fm.temporaryDirectory.appendingPathComponent("BifrostCheck-configsweep-\(UUID().uuidString)")
+        assertUnderTempDir(tempDir, label: "config round-trip sweep tempDir")
+        defer { try? fm.removeItem(at: tempDir) }
+        do {
+            try fm.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        } catch {
+            print("  FAILED to create temp sweep dir: \(error)")
+            return
+        }
+
+        var allPassed = true
+        for realURL in cfgFiles {
+            let fileName = realURL.lastPathComponent
+            guard let originalText = try? String(contentsOf: realURL, encoding: .utf8) else {
+                print("  \(fileName): FAILED to read")
+                allPassed = false
+                continue
+            }
+
+            let tempURL = tempDir.appendingPathComponent(fileName)
+            assertUnderTempDir(tempURL, label: "config round-trip sweep tempURL")
+            do {
+                try originalText.write(to: tempURL, atomically: true, encoding: .utf8)
+            } catch {
+                print("  \(fileName): FAILED to copy to temp: \(error)")
+                allPassed = false
+                continue
+            }
+
+            let parsed = BepInExConfig.parse(originalText)
+            let entryCount = parsed.allEntries.count
+
+            let baselineResult = try? await ShellRunner.run("/usr/bin/grep", ["-cE", "^[^#\\[].* = ", tempURL.path])
+            // grep exits 1 (not an error here) when it finds zero matches;
+            // only treat a missing result entirely as "couldn't compute".
+            let baselineCount = baselineResult.flatMap { Int($0.stdout.trimmingCharacters(in: .whitespacesAndNewlines)) }
+
+            let roundTripped = BepInExConfig.applying([:], to: originalText)
+            let roundTripOK = roundTripped == originalText
+
+            let countOK = baselineCount.map { $0 == entryCount } ?? false
+            let filePass = countOK && roundTripOK
+            allPassed = allPassed && filePass
+
+            print("  \(fileName): parsed=\(entryCount) baseline=\(baselineCount.map(String.init) ?? "?") round-trip-identical=\(roundTripOK) -> \(filePass ? "PASS" : "FAIL")")
+        }
+        print("  -> \(allPassed ? "PASS" : "FAIL") (\(cfgFiles.count) file(s))")
     }
 
     /// Fetches the loader pack's current version from Thunderstore's

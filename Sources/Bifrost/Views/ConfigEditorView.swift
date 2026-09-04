@@ -109,9 +109,15 @@ struct ConfigsListView: View {
 /// field for everything else (numeric types included — no `NumberFormatter`
 /// round trip, so what's typed is exactly what's written back).
 ///
-/// Saves surgically via `BepInExConfig.applying`: only the specific
-/// changed `Key = value` lines are rewritten, so every comment, blank
-/// line, and untouched entry in the file is preserved byte-for-byte.
+/// Saves surgically via `BepInExConfig.applying(values:to:)`: at save time
+/// the file is re-read from disk and the user's edits are re-targeted by
+/// (section, key) — not the line index captured when the sheet opened —
+/// so a rewrite that happened while the editor was open (Valheim mods
+/// commonly rewrite their own `.cfg` at game exit) doesn't get clobbered
+/// by a stale snapshot, and doesn't silently revert the user's own save
+/// either. Every comment, blank line, and untouched entry — whether from
+/// the original open or added by that external rewrite — is preserved
+/// byte-for-byte.
 struct ConfigEditorView: View {
     let url: URL
     let title: String
@@ -128,6 +134,22 @@ struct ConfigEditorView: View {
     @State private var statusLine: String?
     @State private var confirmingClose = false
     @State private var busy = false
+
+    /// The file's on-disk modification date at the moment it was last
+    /// (re)loaded — the baseline `pollForExternalChanges()` compares
+    /// against to detect a rewrite that happened while this sheet stayed
+    /// open.
+    @State private var loadedModificationDate: Date?
+    /// True once polling has noticed the file changed on disk *while the
+    /// user had unsaved edits* — surfaced as a non-blocking banner rather
+    /// than clobbering their edits with an auto-reload. Cleared on the
+    /// next successful load (including the reload a save performs).
+    @State private var externalChangeDetected = false
+    /// True while `pgrep -x Valheim` finds the game running, polled
+    /// alongside the staleness check — the game only reads `.cfg` files at
+    /// startup, so a save while it's running doesn't take effect until the
+    /// next launch, and some mods rewrite their own config at exit.
+    @State private var valheimRunning = false
 
     private var isDirty: Bool { !editedValues.isEmpty }
 
@@ -150,6 +172,24 @@ struct ConfigEditorView: View {
                             .disabled(!isDirty || busy)
                     }
                 }
+                .safeAreaInset(edge: .top) {
+                    VStack(spacing: 0) {
+                        if valheimRunning {
+                            InfoBanner(
+                                text: "Valheim is running — changes are saved to the file, but the game only reads configs at startup, so they take effect next launch. Some mods rewrite their config on exit and may overwrite what you save now.",
+                                systemImage: "gamecontroller.fill",
+                                tint: .orange
+                            )
+                        }
+                        if externalChangeDetected {
+                            InfoBanner(
+                                text: "This file changed on disk (the game may have rewritten it). Your unsaved edits will be re-applied on top when you save.",
+                                systemImage: "arrow.triangle.2.circlepath",
+                                tint: .blue
+                            )
+                        }
+                    }
+                }
                 .safeAreaInset(edge: .bottom) {
                     if let statusLine {
                         Text(statusLine)
@@ -163,6 +203,10 @@ struct ConfigEditorView: View {
         .frame(minWidth: 560, minHeight: 480)
         .presentationBackground(.regularMaterial)
         .task { load() }
+        .task { await pollForExternalChanges() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            checkForExternalChange()
+        }
         .interactiveDismissDisabled(isDirty)
         .confirmationDialog(
             "Discard unsaved changes?",
@@ -332,29 +376,58 @@ struct ConfigEditorView: View {
         editedValues = [:]
         loadError = nil
         statusLine = nil
+        externalChangeDetected = false
+        loadedModificationDate = Self.modificationDate(of: url)
     }
 
+    /// Saves by re-reading the file from disk right now and re-targeting
+    /// every pending edit by (section, key) via
+    /// `BepInExConfig.applying(values:to:)` — never against the
+    /// `originalText` snapshot from when the sheet opened. That snapshot
+    /// can be stale: Valheim mods commonly rewrite their own `.cfg` when
+    /// the game exits, and that can happen at any point while this editor
+    /// sits open. Saving against a stale snapshot would silently clobber
+    /// whatever the game just wrote; re-reading here means the on-disk
+    /// state right before the write — including anything just written
+    /// externally — is what the user's edits land on top of. Edits whose
+    /// (section, key) no longer exists in the current file are skipped and
+    /// reported rather than silently dropped.
     private func save() {
-        guard let originalText else { return }
+        let edits: [BepInExConfig.KeyedChange] = configFile.allEntries.compactMap { entry in
+            guard let edited = editedValues[entry.id] else { return nil }
+            return BepInExConfig.KeyedChange(section: entry.section, key: entry.key, value: edited)
+        }
+        guard !edits.isEmpty else { return }
+
         busy = true
         defer { busy = false }
 
-        var changes: [Int: String] = [:]
-        for entry in configFile.allEntries {
-            if let edited = editedValues[entry.id] {
-                changes[entry.lineIndex] = edited
-            }
+        guard let currentDiskText = try? String(contentsOf: url, encoding: .utf8) else {
+            statusLine = "Couldn't save: \(url.lastPathComponent) is no longer readable."
+            return
         }
-        guard !changes.isEmpty else { return }
 
-        let newText = BepInExConfig.applying(changes, to: originalText)
+        let result = BepInExConfig.applying(values: edits, to: currentDiskText)
         do {
-            try newText.write(to: url, atomically: true, encoding: .utf8)
+            try result.text.write(to: url, atomically: true, encoding: .utf8)
             load()
-            statusLine = "Saved."
+            statusLine = Self.saveStatusLine(skippedCount: result.skipped.count, valheimRunning: valheimRunning)
         } catch {
             statusLine = "Couldn't save: \(error.localizedDescription)"
         }
+    }
+
+    private static func saveStatusLine(skippedCount: Int, valheimRunning: Bool) -> String {
+        var line = "Saved."
+        if skippedCount == 1 {
+            line += " 1 setting no longer exists and was skipped."
+        } else if skippedCount > 1 {
+            line += " \(skippedCount) settings no longer exist and were skipped."
+        }
+        if valheimRunning {
+            line += " (applies next game launch)"
+        }
+        return line
     }
 
     private func requestClose() {
@@ -367,5 +440,73 @@ struct ConfigEditorView: View {
 
     private func revealInFinder() {
         NSWorkspace.shared.activateFileViewerSelecting([url])
+    }
+
+    // MARK: - Staleness / game-running polling
+
+    /// Runs for as long as this sheet is on screen (SwiftUI cancels a
+    /// `.task` automatically when its view disappears): every ~2s, checks
+    /// whether the file changed on disk since it was last loaded and
+    /// whether Valheim is currently running.
+    private func pollForExternalChanges() async {
+        while !Task.isCancelled {
+            checkForExternalChange()
+            await refreshValheimRunning()
+            try? await Task.sleep(for: .seconds(2))
+        }
+    }
+
+    /// If the file's modification date has moved past what it was at last
+    /// load: silently reloads when there are no unsaved edits (nothing for
+    /// the user to lose), or — when there are — just raises
+    /// `externalChangeDetected` so a banner can explain that the pending
+    /// edits will still be re-applied correctly on top at save time (see
+    /// `save()`), without yanking the file out from under whatever they're
+    /// mid-edit on.
+    private func checkForExternalChange() {
+        guard let loadedModificationDate,
+              let currentModificationDate = Self.modificationDate(of: url),
+              currentModificationDate > loadedModificationDate
+        else { return }
+
+        if isDirty {
+            externalChangeDetected = true
+        } else {
+            load()
+        }
+    }
+
+    private func refreshValheimRunning() async {
+        let running = (try? await ShellRunner.run("/usr/bin/pgrep", ["-x", "Valheim"]))?.status == 0
+        if running != valheimRunning {
+            valheimRunning = running
+        }
+    }
+
+    private static func modificationDate(of url: URL) -> Date? {
+        (try? FileManager.default.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date
+    }
+}
+
+/// A quiet, non-blocking full-width notice strip — used for the
+/// "Valheim is running" and "file changed on disk" states in
+/// `ConfigEditorView`, neither of which should block editing or saving.
+private struct InfoBanner: View {
+    let text: String
+    let systemImage: String
+    let tint: Color
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: systemImage)
+                .foregroundStyle(tint)
+            Text(text)
+                .font(.caption)
+                .foregroundStyle(.primary)
+            Spacer(minLength: 0)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(tint.opacity(0.14))
     }
 }
