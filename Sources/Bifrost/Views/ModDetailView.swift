@@ -13,6 +13,13 @@ struct ModDetailView: View {
         case failed(String)
     }
 
+    private enum ReadmeState: Equatable {
+        case idle
+        case loading
+        case loaded(String)
+        case failed(String)
+    }
+
     let package: ThunderstorePackage
     let iconURL: URL?
     /// The full, already-loaded Thunderstore index — used to resolve
@@ -21,6 +28,10 @@ struct ModDetailView: View {
 
     @Environment(AppState.self) private var appState
     @State private var installState: InstallState = .idle
+    @State private var readmeState: ReadmeState = .idle
+    @State private var associatedConfigURL: URL?
+    @State private var keybinds: [BepInExConfig.Entry] = []
+    @State private var configEditorPresented = false
 
     var body: some View {
         ScrollView {
@@ -74,11 +85,30 @@ struct ModDetailView: View {
                         .foregroundStyle(.red)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
+
+                if associatedConfigURL != nil || !keybinds.isEmpty {
+                    configSection
+                }
+
+                readmeSection
             }
             .padding(24)
         }
         .navigationTitle(package.name)
-        .onChange(of: package.id) { installState = .idle }
+        .onChange(of: package.id) {
+            installState = .idle
+            readmeState = .idle
+            associatedConfigURL = nil
+            keybinds = []
+        }
+        .task(id: "\(package.id)-\(appState.manifest.mods.count)") {
+            await loadConfigAssociation()
+        }
+        .sheet(isPresented: $configEditorPresented) {
+            if let associatedConfigURL {
+                ConfigEditorView(url: associatedConfigURL, title: package.fullName)
+            }
+        }
         .alert(
             "Install \(package.name)?",
             isPresented: Binding(
@@ -129,6 +159,149 @@ struct ModDetailView: View {
                 }
             }
         }
+    }
+
+    // MARK: - Config / keybinds
+
+    private var configSection: some View {
+        GroupBox("Config") {
+            VStack(alignment: .leading, spacing: 8) {
+                if !keybinds.isEmpty {
+                    ForEach(keybinds) { entry in
+                        Text("⌨ \(entry.key): \(entry.rawValue)")
+                            .font(.callout)
+                    }
+                }
+                if associatedConfigURL != nil {
+                    Button {
+                        configEditorPresented = true
+                    } label: {
+                        Label("Edit Config", systemImage: "slider.horizontal.3")
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(8)
+        }
+    }
+
+    /// Finds this mod's associated `.cfg` file (if installed and one
+    /// matches — see `BepInExConfig.associate`) and parses its
+    /// `KeyboardShortcut` entries for the compact summary above. Re-runs
+    /// whenever the package changes or the manifest's mod count changes
+    /// (install/uninstall), via the `.task(id:)` in `body`.
+    private func loadConfigAssociation() async {
+        guard appState.manifest.mods.contains(where: { $0.fullName == package.fullName }),
+              let gameDir = appState.status.gameFound else {
+            associatedConfigURL = nil
+            keybinds = []
+            return
+        }
+        let configDir = gameDir.appendingPathComponent("BepInEx/config")
+        guard let url = BepInExConfig.findAssociatedConfig(in: configDir, fullName: package.fullName, name: package.name) else {
+            associatedConfigURL = nil
+            keybinds = []
+            return
+        }
+        associatedConfigURL = url
+        guard let text = try? String(contentsOf: url, encoding: .utf8) else {
+            keybinds = []
+            return
+        }
+        keybinds = BepInExConfig.parse(text).keyboardShortcuts
+    }
+
+    // MARK: - README
+
+    private var readmeSection: some View {
+        GroupBox("README") {
+            VStack(alignment: .leading, spacing: 8) {
+                switch readmeState {
+                case .idle:
+                    Button {
+                        Task { await fetchReadme() }
+                    } label: {
+                        Label("Load README", systemImage: "doc.text")
+                    }
+                case .loading:
+                    HStack(spacing: 8) {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text("Loading README…")
+                            .foregroundStyle(.secondary)
+                    }
+                case .loaded(let markdown):
+                    Text(Self.renderedReadme(markdown))
+                        .textSelection(.enabled)
+                case .failed(let message):
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Couldn't load README: \(message)")
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                        Button("Retry") {
+                            Task { await fetchReadme() }
+                        }
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(8)
+        }
+    }
+
+    /// Renders Thunderstore's README markdown with full block-level
+    /// parsing (headings, lists, links — real package READMEs use all
+    /// three); falls back to inline-only parsing, then to plain text, if
+    /// the markdown doesn't parse cleanly.
+    private static func renderedReadme(_ markdown: String) -> AttributedString {
+        if let full = try? AttributedString(markdown: markdown, options: AttributedString.MarkdownParsingOptions(interpretedSyntax: .full)) {
+            return full
+        }
+        if let inline = try? AttributedString(markdown: markdown, options: AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)) {
+            return inline
+        }
+        return AttributedString(markdown)
+    }
+
+    /// Fetches `https://thunderstore.io/api/experimental/package/{owner}/
+    /// {name}/{version}/readme/` — a `{"markdown": "..."}` JSON body
+    /// (verified against the live API) — and caches the result in
+    /// `ReadmeCache` per package+version so revisiting the same version
+    /// doesn't re-fetch.
+    private func fetchReadme() async {
+        guard let version = package.latestVersion else {
+            readmeState = .failed("No published version")
+            return
+        }
+        let cacheKey = "\(package.owner)/\(package.name)/\(version.versionNumber)"
+        if let cached = await ReadmeCache.shared.markdown(for: cacheKey) {
+            readmeState = .loaded(cached)
+            return
+        }
+
+        readmeState = .loading
+        guard let url = URL(string: "https://thunderstore.io/api/experimental/package/\(package.owner)/\(package.name)/\(version.versionNumber)/readme/") else {
+            readmeState = .failed("Invalid README URL")
+            return
+        }
+
+        do {
+            let (data, response) = try await URLSession.shared.data(from: url)
+            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+                let status = (response as? HTTPURLResponse)?.statusCode ?? -1
+                readmeState = .failed("HTTP \(status)")
+                return
+            }
+            let decoded = try JSONDecoder().decode(ReadmeResponse.self, from: data)
+            await ReadmeCache.shared.setMarkdown(decoded.markdown, for: cacheKey)
+            readmeState = .loaded(decoded.markdown)
+        } catch {
+            readmeState = .failed(error.localizedDescription)
+        }
+    }
+
+    private struct ReadmeResponse: Decodable {
+        let markdown: String
     }
 
     private func describe(_ item: ModManager.ResolvedInstall) -> String {
@@ -235,4 +408,18 @@ struct ModIconView: View {
         .frame(width: size, height: size)
         .clipShape(RoundedRectangle(cornerRadius: size * 0.2))
     }
+}
+
+/// In-memory cache of fetched READMEs, keyed by "owner/name/version" so
+/// revisiting a package's detail view within the same run doesn't re-fetch
+/// a version whose README never changes. An actor rather than plain state
+/// since `ModDetailView` instances come and go with navigation — this
+/// needs to outlive any one of them.
+actor ReadmeCache {
+    static let shared = ReadmeCache()
+
+    private var cache: [String: String] = [:]
+
+    func markdown(for key: String) -> String? { cache[key] }
+    func setMarkdown(_ markdown: String, for key: String) { cache[key] = markdown }
 }

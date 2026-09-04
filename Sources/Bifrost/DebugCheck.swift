@@ -102,6 +102,10 @@ enum DebugCheck {
         print("")
         print("== Profiles ==")
         await checkProfiles()
+
+        print("")
+        print("== Config editor ==")
+        await checkConfigEditor(realGameDir: located?.directory)
     }
 
     // MARK: - Safety guard
@@ -926,6 +930,156 @@ enum DebugCheck {
             return "denikson-BepInExPack_Valheim (loader)"
         case .mod(let fullName, _, let version):
             return "\(fullName)@\(version.versionNumber)"
+        }
+    }
+
+    // MARK: - Config editor
+
+    /// Exercises `BepInExConfig` against a throwaway TEMP copy (guarded by
+    /// `assertUnderTempDir`) of the REAL `Azumatt.FirstPersonMode.cfg` —
+    /// read-only against the real file, every parse/save/diff round-trip
+    /// happens only against the temp copy: structure, the known
+    /// `KeyboardShortcut` entry, description/default population,
+    /// byte-identical no-op round-trip, a single-line surgical change,
+    /// reset-to-default, the filename/mod association heuristic, and (best
+    /// effort, skips gracefully offline) a live README fetch.
+    private static func checkConfigEditor(realGameDir: URL?) async {
+        guard let realGameDir else {
+            print("skipped: no game dir located")
+            return
+        }
+        let realConfigURL = realGameDir.appendingPathComponent("BepInEx/config/Azumatt.FirstPersonMode.cfg")
+        guard let originalText = try? String(contentsOf: realConfigURL, encoding: .utf8) else {
+            print("skipped: could not read real Azumatt.FirstPersonMode.cfg at \(realConfigURL.path)")
+            return
+        }
+        print("real config (read-only): \(realConfigURL.path)")
+
+        let fm = FileManager.default
+        let tempDir = fm.temporaryDirectory.appendingPathComponent("BifrostCheck-configeditor-\(UUID().uuidString)")
+        let tempConfigURL = tempDir.appendingPathComponent("Azumatt.FirstPersonMode.cfg")
+        assertUnderTempDir(tempConfigURL, label: "config editor tempConfigURL")
+        defer { try? fm.removeItem(at: tempDir) }
+
+        do {
+            try fm.createDirectory(at: tempDir, withIntermediateDirectories: true)
+            try originalText.write(to: tempConfigURL, atomically: true, encoding: .utf8)
+        } catch {
+            print("FAILED to set up fixture: \(error)")
+            return
+        }
+        print("temp fixture copy: \(tempConfigURL.path)")
+
+        print("")
+        print("1) parse structure:")
+        let parsed = BepInExConfig.parse(originalText)
+        let sectionCountOK = parsed.sections.count >= 3
+        print("  sections: \(parsed.sections.count) (expect >= 3) -> \(sectionCountOK ? "PASS" : "FAIL")")
+
+        let shortcutEntry = parsed.allEntries.first { $0.key == "Toggle First Person Shortcut" }
+        let shortcutOK = shortcutEntry?.settingType == "KeyboardShortcut" && shortcutEntry?.rawValue == "H + LeftShift"
+        print("  \"Toggle First Person Shortcut\": type=\(shortcutEntry?.settingType ?? "nil") value=\(shortcutEntry?.rawValue ?? "nil") (expect KeyboardShortcut / \"H + LeftShift\") -> \(shortcutOK ? "PASS" : "FAIL")")
+
+        let entriesWithDescriptions = parsed.allEntries.filter { $0.description?.isEmpty == false }.count
+        let entriesWithDefaults = parsed.allEntries.filter { $0.defaultValue?.isEmpty == false }.count
+        let descriptionsOK = entriesWithDescriptions == parsed.allEntries.count
+        let defaultsOK = entriesWithDefaults == parsed.allEntries.count
+        print("  entries: \(parsed.allEntries.count), with descriptions: \(entriesWithDescriptions), with defaults: \(entriesWithDefaults) -> \((descriptionsOK && defaultsOK) ? "PASS" : "FAIL")")
+
+        print("")
+        print("2) round-trip (parse + save with zero changes must be byte-identical):")
+        let roundTripped = BepInExConfig.applying([:], to: originalText)
+        let roundTripOK = roundTripped == originalText
+        print("  byte-identical: \(roundTripOK) -> \(roundTripOK ? "PASS" : "FAIL")")
+
+        print("")
+        print("3) change one value + save -> diff shows exactly 1 changed line:")
+        guard let fovEntry = parsed.allEntries.first(where: { $0.key == "Default FOV" }) else {
+            print("  SKIPPED: could not find \"Default FOV\" entry")
+            return
+        }
+        let changedText = BepInExConfig.applying([fovEntry.lineIndex: "75"], to: originalText)
+        let changedURL = tempDir.appendingPathComponent("changed.cfg")
+        try? changedText.write(to: changedURL, atomically: true, encoding: .utf8)
+        let hunks = await diffHunkCount(tempConfigURL, changedURL)
+        let reparsed = BepInExConfig.parse(changedText)
+        let rereadValue = reparsed.allEntries.first { $0.key == "Default FOV" }?.rawValue
+        let untouchedElsewhere = reparsed.allEntries.filter { $0.key != "Default FOV" } == parsed.allEntries.filter { $0.key != "Default FOV" }
+        let changeOK = hunks == 1 && rereadValue == "75" && untouchedElsewhere
+        print("  diff-hunks=\(hunks.map(String.init) ?? "?") (expect 1) reread=\(rereadValue ?? "nil") (expect 75) other-entries-untouched=\(untouchedElsewhere) -> \(changeOK ? "PASS" : "FAIL")")
+
+        print("")
+        print("4) reset-to-default logic (\"Default FOV\" untouched in the original fixture, so current == default):")
+        let resetOK = fovEntry.defaultValue == "65" && fovEntry.rawValue == fovEntry.defaultValue
+        print("  default=\(fovEntry.defaultValue ?? "nil") current=\(fovEntry.rawValue) -> \(resetOK ? "PASS" : "FAIL")")
+
+        print("")
+        print("5) association heuristic:")
+        let candidates = [(fullName: "Azumatt-FirstPersonMode", name: "First Person Mode")]
+        let matched = BepInExConfig.associate(cfgFileName: "Azumatt.FirstPersonMode.cfg", candidates: candidates)
+        let unmatched = BepInExConfig.associate(cfgFileName: "BepInEx.cfg", candidates: candidates)
+        let associationOK = matched == "Azumatt-FirstPersonMode" && unmatched == nil
+        print("  \"Azumatt.FirstPersonMode.cfg\" -> \(matched ?? "nil") (expect Azumatt-FirstPersonMode)")
+        print("  \"BepInEx.cfg\" -> \(unmatched.map { "\"\($0)\"" } ?? "nil") (expect nil)")
+        print("  -> \(associationOK ? "PASS" : "FAIL")")
+
+        print("")
+        print("6) discoverConfigs against the real config dir (read-only):")
+        let realConfigDir = realGameDir.appendingPathComponent("BepInEx/config")
+        let discovered = BepInExConfig.discoverConfigs(in: realConfigDir, candidates: candidates)
+        let discoveredOK = discovered.contains { $0.fileName == "Azumatt.FirstPersonMode.cfg" && $0.associatedFullName == "Azumatt-FirstPersonMode" }
+            && discovered.contains { $0.fileName == "BepInEx.cfg" && $0.associatedFullName == nil }
+        for config in discovered {
+            print("  \(config.fileName) -> \(config.associatedFullName ?? "(unmatched)")")
+        }
+        print("  -> \(discoveredOK ? "PASS" : "FAIL")")
+
+        print("")
+        print("7) README fetch (best effort, skips gracefully offline):")
+        await checkReadmeFetch()
+    }
+
+    /// Fetches the loader pack's current version from Thunderstore's
+    /// package metadata endpoint, then its README from the experimental
+    /// `{owner}/{name}/{version}/readme/` endpoint — a `{"markdown":
+    /// "..."}` JSON body (verified against the live API). Never hits a
+    /// hardcoded version, so this keeps working as the pack updates.
+    private static func checkReadmeFetch() async {
+        struct PackageMeta: Decodable {
+            struct Latest: Decodable {
+                let versionNumber: String
+                enum CodingKeys: String, CodingKey { case versionNumber = "version_number" }
+            }
+            let latest: Latest
+        }
+        struct ReadmeResponse: Decodable { let markdown: String }
+
+        guard let metadataURL = URL(string: "https://thunderstore.io/api/experimental/package/denikson/BepInExPack_Valheim/") else {
+            print("  FAILED: bad metadata URL")
+            return
+        }
+        do {
+            let (metaData, metaResponse) = try await URLSession.shared.data(from: metadataURL)
+            guard let metaHTTP = metaResponse as? HTTPURLResponse, (200..<300).contains(metaHTTP.statusCode) else {
+                print("  skipped: could not fetch package metadata (offline or API unavailable)")
+                return
+            }
+            let meta = try JSONDecoder().decode(PackageMeta.self, from: metaData)
+
+            guard let readmeURL = URL(string: "https://thunderstore.io/api/experimental/package/denikson/BepInExPack_Valheim/\(meta.latest.versionNumber)/readme/") else {
+                print("  FAILED: bad readme URL")
+                return
+            }
+            let (data, response) = try await URLSession.shared.data(from: readmeURL)
+            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+                print("  skipped: non-2xx readme response")
+                return
+            }
+            let decoded = try JSONDecoder().decode(ReadmeResponse.self, from: data)
+            let nonEmpty = !decoded.markdown.isEmpty
+            print("  denikson-BepInExPack_Valheim@\(meta.latest.versionNumber) markdown length: \(decoded.markdown.count) -> \(nonEmpty ? "PASS" : "FAIL")")
+        } catch {
+            print("  skipped: \(error) (likely offline)")
         }
     }
 }
