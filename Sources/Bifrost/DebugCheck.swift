@@ -80,6 +80,10 @@ enum DebugCheck {
         checkLauncherPlan()
 
         print("")
+        print("== Launch readiness ==")
+        await checkLaunchReadiness()
+
+        print("")
         print("== Diagnostics classification ==")
         checkDiagnostics(gameDir: located?.directory)
 
@@ -329,6 +333,110 @@ enum DebugCheck {
                 print("  - \(step.description)")
             }
         }
+    }
+
+    // MARK: - Launch readiness
+
+    /// Drives `SteamLaunchLogParser`'s pure classification against four
+    /// fixture scenarios — two lifted verbatim from the task's real console
+    /// log excerpts (dropped, completed-despite-an-earlier-long-block), one
+    /// built from this machine's own real `console_log.txt` (interstitial
+    /// auto-continue), and one trimmed to isolate the still-unanswered
+    /// moment of a blocking dialog (KickingOtherSession). Then, only when
+    /// it's safe to do so, live-checks that `ensureSteamRunning` is a fast,
+    /// silent no-op when Steam is already running.
+    private static func checkLaunchReadiness() async {
+        let appID = GameLocator.valheimAppID
+
+        func runScenario(_ name: String, lines: [String], now: Date, expect: SteamLaunchLogParser.Outcome) {
+            let outcome = SteamLaunchLogParser.classifyLaunch(lines: lines, appID: appID, now: now)
+            let pass = outcome == expect
+            print("\(name): -> \(outcome) (expect \(expect)) -> \(pass ? "PASS" : "FAIL")")
+        }
+
+        // Scenario 1: dropped — the URL was opened but Steam never logged a
+        // single GameAction line for it.
+        let dropped = [
+            "[2026-09-04 16:41:39] ExecuteSteamURL: \"steam://rungameid/892970\"",
+        ]
+        runScenario("dropped launch (no GameAction lines at all)", lines: dropped, now: fixtureDate("2026-09-04 16:42:00"), expect: .dropped)
+
+        // Scenario 2: blocked — real excerpt, trimmed to the moment the
+        // KickingOtherSession dialog is still unanswered (its resolution,
+        // 44 minutes later in the full log, hasn't happened yet from this
+        // snapshot's point of view).
+        let blocked = [
+            "[2026-09-04 16:41:39] ExecuteSteamURL: \"steam://rungameid/892970\"",
+            "[2026-09-04 16:41:39] GameAction [AppID 892970, ActionID 1] : LaunchApp changed task to SynchronizingCloud with \"\"",
+            "[2026-09-04 16:41:40] GameAction [AppID 892970, ActionID 1] : LaunchApp waiting for user response to KickingOtherSession \"HELLDIVERS™ 2\"",
+        ]
+        runScenario("blocked launch (KickingOtherSession, unanswered)", lines: blocked, now: fixtureDate("2026-09-04 16:41:50"), expect: .blocked(task: "KickingOtherSession"))
+
+        // Scenario 3: interstitial auto-continue — real lines from this
+        // machine's own console_log.txt (denikson launch on 2026-09-04).
+        // ShowInterstitials asks the same "waiting for user response"
+        // question as a genuine block, but answers itself in the same
+        // second — must NOT classify as blocked even though `now` here is
+        // long past the attention threshold.
+        let interstitial = [
+            "[2026-09-04 17:30:52] GameAction [AppID 892970, ActionID 1] : LaunchApp changed task to ShowInterstitials with \"\"",
+            "[2026-09-04 17:30:52] GameAction [AppID 892970, ActionID 1] : LaunchApp waiting for user response to ShowInterstitials \"\"",
+            "[2026-09-04 17:30:52] GameAction [AppID 892970, ActionID 1] : LaunchApp continues with user response \"ShowInterstitials\"",
+            "[2026-09-04 17:30:52] GameAction [AppID 892970, ActionID 1] : LaunchApp changed task to SynchronizingControllerConfig with \"\"",
+        ]
+        runScenario("interstitial auto-continue (not a block)", lines: interstitial, now: fixtureDate("2026-09-04 17:31:30"), expect: .inProgress)
+
+        // Scenario 4: completed — the full real excerpt, including the
+        // 44-minute-later resolution. Proves `.completed` wins over the
+        // earlier unresolved KickingOtherSession wait rather than getting
+        // stuck reporting blocked forever.
+        let completed = [
+            "[2026-09-04 16:41:39] ExecuteSteamURL: \"steam://rungameid/892970\"",
+            "[2026-09-04 16:41:39] GameAction [AppID 892970, ActionID 1] : LaunchApp changed task to SynchronizingCloud with \"\"",
+            "[2026-09-04 16:41:40] GameAction [AppID 892970, ActionID 1] : LaunchApp waiting for user response to KickingOtherSession \"HELLDIVERS™ 2\"",
+            "[2026-09-04 17:25:35] GameAction [AppID 892970, ActionID 2] : LaunchApp changed task to CreatingProcess with \"\"",
+            "[2026-09-04 17:25:36] GameAction [AppID 892970, ActionID 2] : LaunchApp changed task to Completed with \"\"",
+        ]
+        runScenario("completed launch (resolves despite the earlier long block)", lines: completed, now: fixtureDate("2026-09-04 17:25:40"), expect: .completed)
+
+        let startupLine = ["[2026-09-04 17:30:49] System startup time: 3.27 seconds"]
+        let readinessDetected = SteamLaunchLogParser.containsStartupCompletion(startupLine)
+        let readinessAbsent = !SteamLaunchLogParser.containsStartupCompletion(dropped)
+        print("startup-completion detection: present -> \(readinessDetected), absent in unrelated lines -> \(readinessAbsent) -> \((readinessDetected && readinessAbsent) ? "PASS" : "FAIL")")
+
+        print("")
+        let valheimRunning = (try? await ShellRunner.run("/usr/bin/pgrep", ["-x", "Valheim"]))?.status == 0
+        let steamRunning = (try? await ShellRunner.run("/usr/bin/pgrep", ["-x", "steam_osx"]))?.status == 0
+        print("Valheim running: \(valheimRunning), Steam running: \(steamRunning)")
+
+        guard !valheimRunning, steamRunning else {
+            print("skipped live ensureSteamRunning no-op test — requires Steam already running and Valheim not running (safe default otherwise)")
+            return
+        }
+
+        print("live no-op test: Steam is already running -> ensureSteamRunning should return true immediately without opening or announcing anything")
+        // `onPhase` is `@Sendable` (it may be invoked from a polling loop
+        // that isn't this function's own isolation domain), but
+        // `ensureSteamRunning` only ever calls it sequentially within its
+        // own single await chain — never concurrently — so a plain
+        // captured var is safe here despite the compiler's conservative
+        // default; `nonisolated(unsafe)` documents that instead of routing
+        // through an actor for what's just a debug-print sanity check.
+        nonisolated(unsafe) var phasesSeen: [Launcher.LaunchPhase] = []
+        let start = Date()
+        let ready = await Launcher.ensureSteamRunning { phase in phasesSeen.append(phase) }
+        let elapsed = Date().timeIntervalSince(start)
+        let fast = elapsed < 2.0
+        let silent = phasesSeen.isEmpty
+        print("  ready=\(ready) elapsed=\(String(format: "%.2f", elapsed))s phases-emitted=\(phasesSeen) -> \((ready && fast && silent) ? "PASS" : "FAIL")")
+    }
+
+    private static func fixtureDate(_ string: String) -> Date {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        formatter.timeZone = TimeZone.current
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        return formatter.date(from: string) ?? Date()
     }
 
     // MARK: - Diagnostics

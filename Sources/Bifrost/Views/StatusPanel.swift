@@ -6,6 +6,8 @@ struct StatusPanel: View {
     @Environment(AppState.self) private var appState
     @State private var launchStatusLine: String?
     @State private var diagnosticsTask: Task<Void, Never>?
+    @State private var launchTask: Task<Void, Never>?
+    @State private var isLaunching = false
 
     var body: some View {
         VStack(spacing: 24) {
@@ -72,7 +74,7 @@ struct StatusPanel: View {
                         .padding(.vertical, 8)
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(!appState.status.readyToPlay)
+                .disabled(!appState.status.readyToPlay || isLaunching)
                 .help(appState.status.readyToPlay ? "" : "Finish setup above before playing modded")
 
                 Button {
@@ -83,14 +85,26 @@ struct StatusPanel: View {
                         .padding(.vertical, 8)
                 }
                 .buttonStyle(.bordered)
-                .disabled(appState.status.gameFound == nil)
+                .disabled(appState.status.gameFound == nil || isLaunching)
             }
 
             if let launchStatusLine {
-                Text(launchStatusLine)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                HStack(spacing: 8) {
+                    if isLaunching {
+                        ProgressView()
+                            .controlSize(.small)
+                    }
+                    Text(launchStatusLine)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    if isLaunching {
+                        Button("Cancel", action: cancelLaunch)
+                            .font(.caption)
+                            .buttonStyle(.plain)
+                            .foregroundStyle(.blue)
+                    }
+                }
             }
 
             HStack(spacing: 16) {
@@ -131,21 +145,68 @@ struct StatusPanel: View {
     }
 
     private func play(modded: Bool) {
-        guard let gameDir = appState.status.gameFound else { return }
+        guard appState.status.gameFound != nil else { return }
 
+        launchTask?.cancel()
+        diagnosticsTask?.cancel()
+        isLaunching = true
+        launchStatusLine = nil
+
+        launchTask = Task {
+            await runLaunch(modded: modded)
+        }
+    }
+
+    private func runLaunch(modded: Bool) async {
+        defer { isLaunching = false }
+
+        let finalPhase: Launcher.LaunchPhase
         do {
-            try Launcher.play(modded: modded)
+            finalPhase = try await Launcher.play(modded: modded) { phase in
+                Task { @MainActor in launchStatusLine = Self.describe(phase) }
+            }
         } catch {
+            if Task.isCancelled { return }
             launchStatusLine = "Couldn't launch: \(error.localizedDescription)"
             return
         }
+        if Task.isCancelled { return }
 
-        launchStatusLine = modded ? "Launching modded — watching for BepInEx…" : "Launching vanilla…"
+        launchStatusLine = Self.describe(finalPhase)
+
+        guard finalPhase == .launched, let gameDir = appState.status.gameFound else { return }
+
         diagnosticsTask?.cancel()
         diagnosticsTask = Task {
             let diagnosis = await Diagnostics.watch(gameDir: gameDir, modded: modded)
             if Task.isCancelled { return }
             launchStatusLine = diagnosis.summary
+        }
+    }
+
+    private func cancelLaunch() {
+        launchTask?.cancel()
+        diagnosticsTask?.cancel()
+        isLaunching = false
+        launchStatusLine = "Cancelled — Steam's launch (if any) is still whatever it was, Bifrost just stopped watching it."
+    }
+
+    private static func describe(_ phase: Launcher.LaunchPhase) -> String {
+        switch phase {
+        case .startingSteam:
+            return "Starting Steam…"
+        case .waitingForSteam:
+            return "Waiting for Steam…"
+        case .launching:
+            return "Launching through Steam…"
+        case .steamNeedsAttention(let task, let hint):
+            return "Steam needs your attention (\(task)): \(hint)"
+        case .launched:
+            return "Launched through Steam — checking mods…"
+        case .steamFailedToStart:
+            return "Steam didn't start in time — make sure it's installed, then try again."
+        case .launchNotConfirmed(let hint):
+            return hint
         }
     }
 }
