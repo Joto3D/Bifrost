@@ -3,7 +3,14 @@ import AppKit
 
 @main
 struct BifrostApp: App {
+    @State private var appState = AppState()
+
     init() {
+        // Headless diagnostics escape hatch: `swift run Bifrost --check`
+        // runs the setup/Thunderstore checks and exits, before any UI
+        // (window, activation policy, etc.) is touched.
+        DebugCheck.runIfRequested()
+
         // SPM executables have no app bundle at dev time, so AppKit doesn't
         // automatically switch us into a regular foreground app with a menu
         // bar and a real window. Do that manually so `swift run` behaves
@@ -15,6 +22,7 @@ struct BifrostApp: App {
     var body: some Scene {
         WindowGroup {
             MainWindow()
+                .environment(appState)
                 .frame(minWidth: 900, minHeight: 600)
         }
         .defaultSize(width: 900, height: 600)

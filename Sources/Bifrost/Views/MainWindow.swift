@@ -6,12 +6,12 @@ import SwiftUI
 struct MainWindow: View {
     var body: some View {
         TabView {
-            HomeView()
+            StatusPanel()
                 .tabItem {
                     Label("Home", systemImage: "house")
                 }
 
-            BrowseView()
+            ModBrowserView()
                 .tabItem {
                     Label("Browse", systemImage: "magnifyingglass")
                 }
@@ -27,22 +27,6 @@ struct MainWindow: View {
                 }
         }
         .frame(minWidth: 900, minHeight: 600)
-    }
-}
-
-private struct HomeView: View {
-    var body: some View {
-        Text("Home")
-            .font(.title)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-    }
-}
-
-private struct BrowseView: View {
-    var body: some View {
-        Text("Browse")
-            .font(.title)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
