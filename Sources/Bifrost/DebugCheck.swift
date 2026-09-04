@@ -1019,9 +1019,40 @@ enum DebugCheck {
         print("  diff-hunks=\(hunks.map(String.init) ?? "?") (expect 1) reread=\(rereadValue ?? "nil") (expect 75) other-entries-untouched=\(untouchedElsewhere) -> \(changeOK ? "PASS" : "FAIL")")
 
         print("")
-        print("4) reset-to-default logic (\"Default FOV\" untouched in the original fixture, so current == default):")
-        let resetOK = fovEntry.defaultValue == "65" && fovEntry.rawValue == fovEntry.defaultValue
-        print("  default=\(fovEntry.defaultValue ?? "nil") current=\(fovEntry.rawValue) -> \(resetOK ? "PASS" : "FAIL")")
+        print("4) reset-to-default logic (embedded fixture, not the real file — this machine's real Default FOV may well differ from its default already):")
+        // Deliberately not asserted against `fovEntry`/`originalText` above:
+        // those come from the REAL Azumatt.FirstPersonMode.cfg, whose
+        // current value is whatever this developer has it set to right now
+        // (e.g. changed from the shipped default of 65 to 100) — a
+        // perfectly normal thing for a real config to be, but it made this
+        // step fail on any machine where the value had ever been touched.
+        // The reset-to-default *logic* being tested here is
+        // `ConfigEditorView`'s "Reset to Default" button, which just writes
+        // the entry's own `defaultValue` back via `BepInExConfig.applying`
+        // — that's exercised below against a small embedded fixture string
+        // instead, so this section's PASS/FAIL no longer depends on what
+        // this machine's real file happens to contain.
+        let fixtureConfigText = """
+        [General]
+
+        ## The field of view to use while first person mode is active.
+        # Setting type: Single
+        # Default value: 65
+        Default FOV = 100
+        """
+        let fixtureParsed = BepInExConfig.parse(fixtureConfigText)
+        guard let fixtureFovEntry = fixtureParsed.allEntries.first(where: { $0.key == "Default FOV" }) else {
+            print("  FAILED: could not parse \"Default FOV\" out of the embedded fixture")
+            return
+        }
+        let fixtureStartsChanged = fixtureFovEntry.defaultValue == "65"
+            && fixtureFovEntry.rawValue == "100"
+            && fixtureFovEntry.rawValue != fixtureFovEntry.defaultValue
+        let afterResetText = BepInExConfig.applying([fixtureFovEntry.lineIndex: fixtureFovEntry.defaultValue!], to: fixtureConfigText)
+        let afterResetValue = BepInExConfig.parse(afterResetText).allEntries.first { $0.key == "Default FOV" }?.rawValue
+        let resetOK = fixtureStartsChanged && afterResetValue == fixtureFovEntry.defaultValue
+        print("  fixture starts changed from default: default=\(fixtureFovEntry.defaultValue ?? "nil") current=\(fixtureFovEntry.rawValue) -> \(fixtureStartsChanged)")
+        print("  after applying Reset to Default: current=\(afterResetValue ?? "nil") (expect \(fixtureFovEntry.defaultValue ?? "nil")) -> \(resetOK ? "PASS" : "FAIL")")
 
         print("")
         print("5) association heuristic:")

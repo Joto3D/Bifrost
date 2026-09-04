@@ -26,9 +26,9 @@ struct ConfigsListView: View {
                     VStack(spacing: 12) {
                         Image(systemName: "doc.text")
                             .font(.largeTitle)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(.tertiary)
                         Text("No .cfg files found")
-                            .font(.headline)
+                            .font(Theme.headingFont(15))
                         Text("Config files show up here once a mod that uses BepInEx's config system has been run at least once.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -69,6 +69,7 @@ struct ConfigsListView: View {
             }
         }
         .frame(minWidth: 440, minHeight: 380)
+        .presentationBackground(.regularMaterial)
     }
 
     @ViewBuilder
@@ -138,6 +139,9 @@ struct ConfigEditorView: View {
                         Button("Close") { requestClose() }
                     }
                     ToolbarItemGroup(placement: .primaryAction) {
+                        if isDirty {
+                            AuroraBadge(text: "Unsaved", systemImage: "circle.fill")
+                        }
                         Button("Reveal in Finder") { revealInFinder() }
                         Button("Revert") { load() }
                             .disabled(!isDirty)
@@ -156,6 +160,7 @@ struct ConfigEditorView: View {
                 }
         }
         .frame(minWidth: 560, minHeight: 480)
+        .presentationBackground(.regularMaterial)
         .task { load() }
         .interactiveDismissDisabled(isDirty)
         .confirmationDialog(
@@ -229,9 +234,9 @@ struct ConfigEditorView: View {
                     Button("Reset to Default") {
                         setCurrentValue(defaultValue, for: entry)
                     }
-                    .font(.caption2)
+                    .font(.caption2.weight(.medium))
                     .buttonStyle(.plain)
-                    .foregroundStyle(Color.accentColor)
+                    .foregroundStyle(Theme.auroraGradient)
                 }
             }
         }

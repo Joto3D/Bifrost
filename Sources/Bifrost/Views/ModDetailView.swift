@@ -33,57 +33,47 @@ struct ModDetailView: View {
     @State private var keybinds: [BepInExConfig.Entry] = []
     @State private var configEditorPresented = false
 
+    private let readableWidth: CGFloat = 640
+
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
+            VStack(alignment: .leading, spacing: Theme.Spacing.xl) {
                 header
 
-                if let version = package.latestVersion {
-                    GroupBox("Version") {
-                        VStack(alignment: .leading, spacing: 8) {
-                            LabeledContent("Latest", value: version.versionNumber)
-                            LabeledContent("Downloads", value: version.downloads.formatted())
-                            LabeledContent("Size", value: byteFormatter.string(fromByteCount: Int64(version.fileSize)))
+                chipsRow
 
-                            if !version.dependencies.isEmpty {
-                                Divider()
-                                Text("Dependencies")
-                                    .font(.subheadline.weight(.semibold))
-                                ForEach(version.dependencies, id: \.self) { dependency in
-                                    Text(dependency)
-                                        .font(.callout)
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
-                        }
-                        .padding(8)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    }
+                Link(destination: package.packageURL) {
+                    Label("Open on Thunderstore", systemImage: "arrow.up.right.square")
                 }
-
-                if let description = package.latestVersion?.description, !description.isEmpty {
-                    GroupBox("Description") {
-                        Text(description)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(8)
-                    }
-                }
-
-                HStack(spacing: 12) {
-                    Link(destination: package.packageURL) {
-                        Label("Open on Thunderstore", systemImage: "arrow.up.right.square")
-                    }
-
-                    Spacer()
-
-                    installControl
-                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: readableWidth, alignment: .leading)
 
                 if case .failed(let message) = installState {
                     Text(message)
                         .font(.caption)
                         .foregroundStyle(.red)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .frame(maxWidth: readableWidth, alignment: .leading)
+                }
+
+                if let description = package.latestVersion?.description, !description.isEmpty {
+                    VStack(alignment: .leading, spacing: Theme.Spacing.s) {
+                        SectionHeader(title: "Description")
+                        Text(description)
+                            .frame(maxWidth: readableWidth, alignment: .leading)
+                    }
+                }
+
+                if let version = package.latestVersion, !version.dependencies.isEmpty {
+                    VStack(alignment: .leading, spacing: Theme.Spacing.s) {
+                        SectionHeader(title: "Dependencies", systemImage: "link")
+                        FlowLayout(spacing: 6) {
+                            ForEach(version.dependencies, id: \.self) { dependency in
+                                Chip(text: dependency, systemImage: "shippingbox")
+                            }
+                        }
+                        .frame(maxWidth: readableWidth, alignment: .leading)
+                    }
                 }
 
                 if associatedConfigURL != nil || !keybinds.isEmpty {
@@ -92,7 +82,8 @@ struct ModDetailView: View {
 
                 readmeSection
             }
-            .padding(24)
+            .padding(Theme.Spacing.xl)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .navigationTitle(package.name)
         .onChange(of: package.id) {
@@ -133,6 +124,7 @@ struct ModDetailView: View {
     private var installControl: some View {
         if let installedMod = appState.manifest.mods.first(where: { $0.fullName == package.fullName }) {
             Label("Installed ✓ (\(installedMod.version))", systemImage: "checkmark.circle.fill")
+                .font(.subheadline.weight(.medium))
                 .foregroundStyle(.green)
         } else {
             switch installState {
@@ -141,8 +133,10 @@ struct ModDetailView: View {
                     Task { await startInstall() }
                 } label: {
                     Label("Install", systemImage: "square.and.arrow.down")
+                        .padding(.horizontal, Theme.Spacing.s)
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.aurora)
+                .fixedSize()
                 .disabled(appState.status.gameFound == nil)
                 .help(appState.status.gameFound == nil ? "Valheim not found — check the Home tab" : "")
 
@@ -161,15 +155,34 @@ struct ModDetailView: View {
         }
     }
 
+    // MARK: - Chips
+
+    private var chipsRow: some View {
+        FlowLayout(spacing: 6) {
+            if let version = package.latestVersion {
+                Chip(text: version.downloads.formatted(.number.notation(.compactName)), systemImage: "arrow.down.circle")
+                Chip(text: byteFormatter.string(fromByteCount: Int64(version.fileSize)), systemImage: "internaldrive")
+            }
+            Chip(text: package.ratingScore.formatted(), systemImage: "star.fill", tint: .yellow)
+            ForEach(package.categories.prefix(6), id: \.self) { category in
+                Chip(text: category, tint: .accentColor)
+            }
+        }
+        .frame(maxWidth: readableWidth, alignment: .leading)
+    }
+
     // MARK: - Config / keybinds
 
     private var configSection: some View {
-        GroupBox("Config") {
-            VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: Theme.Spacing.s) {
+            SectionHeader(title: "Config", systemImage: "slider.horizontal.3")
+
+            VStack(alignment: .leading, spacing: Theme.Spacing.s) {
                 if !keybinds.isEmpty {
-                    ForEach(keybinds) { entry in
-                        Text("⌨ \(entry.key): \(entry.rawValue)")
-                            .font(.callout)
+                    FlowLayout(spacing: 6) {
+                        ForEach(keybinds) { entry in
+                            Chip(text: "\(entry.key): \(entry.rawValue)", systemImage: "keyboard")
+                        }
                     }
                 }
                 if associatedConfigURL != nil {
@@ -178,10 +191,12 @@ struct ModDetailView: View {
                     } label: {
                         Label("Edit Config", systemImage: "slider.horizontal.3")
                     }
+                    .buttonStyle(.bordered)
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(8)
+            .padding(Theme.Spacing.m)
+            .frame(maxWidth: readableWidth, alignment: .leading)
+            .bifrostCard()
         }
     }
 
@@ -214,8 +229,10 @@ struct ModDetailView: View {
     // MARK: - README
 
     private var readmeSection: some View {
-        GroupBox("README") {
-            VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: Theme.Spacing.s) {
+            SectionHeader(title: "README", systemImage: "doc.text")
+
+            Group {
                 switch readmeState {
                 case .idle:
                     Button {
@@ -223,6 +240,7 @@ struct ModDetailView: View {
                     } label: {
                         Label("Load README", systemImage: "doc.text")
                     }
+                    .buttonStyle(.bordered)
                 case .loading:
                     HStack(spacing: 8) {
                         ProgressView()
@@ -233,6 +251,7 @@ struct ModDetailView: View {
                 case .loaded(let markdown):
                     Text(Self.renderedReadme(markdown))
                         .textSelection(.enabled)
+                        .lineSpacing(3)
                 case .failed(let message):
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Couldn't load README: \(message)")
@@ -241,11 +260,13 @@ struct ModDetailView: View {
                         Button("Retry") {
                             Task { await fetchReadme() }
                         }
+                        .buttonStyle(.bordered)
                     }
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(8)
+            .padding(Theme.Spacing.m)
+            .frame(maxWidth: readableWidth, alignment: .leading)
+            .bifrostCard()
         }
     }
 
@@ -354,26 +375,29 @@ struct ModDetailView: View {
     }
 
     private var header: some View {
-        HStack(alignment: .top, spacing: 16) {
+        HStack(alignment: .top, spacing: Theme.Spacing.l) {
             ModIconView(url: iconURL, size: 64)
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(package.name)
-                    .font(.title2.bold())
+                    .font(Theme.titleFont(20))
                 Text("by \(package.owner)")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
-
-                HStack(spacing: 12) {
-                    Label("\(package.totalDownloads.formatted())", systemImage: "arrow.down.circle")
-                    Label("\(package.ratingScore.formatted())", systemImage: "star.fill")
+                if let version = package.latestVersion {
+                    Text("v\(version.versionNumber)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
-                .font(.caption)
-                .foregroundStyle(.secondary)
             }
 
-            Spacer()
+            Spacer(minLength: 0)
+
+            installControl
         }
+        .padding(Theme.Spacing.l)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .bifrostCard()
     }
 
     private var byteFormatter: ByteCountFormatter {
@@ -390,12 +414,13 @@ struct ModIconView: View {
     var size: CGFloat = 44
 
     var body: some View {
-        AsyncImage(url: url) { phase in
+        AsyncImage(url: url, transaction: Transaction(animation: Theme.settle)) { phase in
             switch phase {
             case .success(let image):
                 image
                     .resizable()
                     .aspectRatio(contentMode: .fill)
+                    .transition(.opacity)
             default:
                 RoundedRectangle(cornerRadius: size * 0.2)
                     .fill(.quaternary)

@@ -161,12 +161,17 @@ struct SettingsView: View {
     // MARK: - About
 
     private var aboutFooter: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Bifrost \(appVersion)")
-                .font(.headline)
-            Text("Launches Valheim through Steam with BepInEx mods on Apple Silicon.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+        HStack(spacing: Theme.Spacing.m) {
+            Image(systemName: "shield.lefthalf.filled")
+                .font(.title2)
+                .foregroundStyle(Theme.auroraGradient)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Bifrost \(appVersion)")
+                    .font(Theme.headingFont(14))
+                Text("Launches Valheim through Steam with BepInEx mods on Apple Silicon.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, 4)

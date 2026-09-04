@@ -72,7 +72,7 @@ struct InstalledModsView: View {
     private var header: some View {
         HStack {
             Text("Installed")
-                .font(.title2.bold())
+                .font(Theme.titleFont(20))
 
             Spacer()
 
@@ -146,10 +146,10 @@ struct InstalledModsView: View {
         VStack(spacing: 12) {
             Image(systemName: "shippingbox")
                 .font(.largeTitle)
-                .foregroundStyle(.secondary)
-            Text("No mods installed yet")
-                .font(.headline)
-            Text("Install mods from the Browse tab.")
+                .foregroundStyle(.tertiary)
+            Text("No mods yet — find some in Browse")
+                .font(Theme.headingFont(15))
+            Text("Installed mods, their versions, and their configs will show up here.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -276,43 +276,29 @@ private struct InstalledModRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            ModIconView(url: iconURL, size: 36)
+            ModIconView(url: iconURL, size: 40)
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text(mod.fullName)
-                    .font(.body.weight(.semibold))
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Text(mod.fullName)
+                        .font(.body.weight(.semibold))
+                    if update != nil {
+                        AuroraBadge(text: "Update", systemImage: "arrow.up.circle.fill")
+                    }
+                }
                 Text("v\(mod.version)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 if !keybinds.isEmpty {
-                    Text(keybinds.map { "⌨ \($0.key): \($0.rawValue)" }.joined(separator: "   "))
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
+                    FlowLayout(spacing: 4) {
+                        ForEach(keybinds) { entry in
+                            Chip(text: "\(entry.key): \(entry.rawValue)", systemImage: "keyboard")
+                        }
+                    }
                 }
             }
 
             Spacer()
-
-            if let configURL {
-                Button {
-                    onEditConfig(configURL)
-                } label: {
-                    Image(systemName: "slider.horizontal.3")
-                }
-                .help("Edit config")
-                .disabled(isBusy)
-            }
-
-            if let update {
-                Button {
-                    onUpdate()
-                } label: {
-                    Label("Update to \(update.latestVersion)", systemImage: "arrow.down.circle")
-                }
-                .disabled(isBusy)
-            }
 
             Toggle("Enabled", isOn: Binding(
                 get: { mod.enabled },
@@ -322,19 +308,39 @@ private struct InstalledModRow: View {
             .toggleStyle(.switch)
             .disabled(isBusy)
 
-            Button(role: .destructive) {
-                onRemove()
-            } label: {
-                Image(systemName: "trash")
-            }
-            .disabled(isBusy)
-
             if isBusy {
                 ProgressView()
                     .controlSize(.small)
+            } else {
+                Menu {
+                    if let update {
+                        Button {
+                            onUpdate()
+                        } label: {
+                            Label("Update to \(update.latestVersion)", systemImage: "arrow.down.circle")
+                        }
+                    }
+                    if let configURL {
+                        Button {
+                            onEditConfig(configURL)
+                        } label: {
+                            Label("Edit Config", systemImage: "slider.horizontal.3")
+                        }
+                    }
+                    Button(role: .destructive) {
+                        onRemove()
+                    } label: {
+                        Label("Remove", systemImage: "trash")
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .disabled(isBusy)
             }
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, 6)
         .opacity(isBusy ? 0.6 : 1)
     }
 }

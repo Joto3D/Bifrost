@@ -69,9 +69,11 @@ struct SetupWizardView: View {
             footer
         }
         .frame(width: 560, height: 440)
+        .presentationBackground(.regularMaterial)
         .task(id: step) {
             await runAutoStepIfNeeded()
         }
+        .animation(Theme.settle, value: step)
     }
 
     // MARK: - Chrome
@@ -80,14 +82,14 @@ struct SetupWizardView: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 6) {
                 ForEach(Step.allCases, id: \.rawValue) { s in
-                    Circle()
-                        .fill(s.rawValue <= step.rawValue ? Color.accentColor : Color.secondary.opacity(0.25))
-                        .frame(width: 7, height: 7)
+                    Capsule()
+                        .fill(s.rawValue <= step.rawValue ? AnyShapeStyle(Theme.auroraGradient) : AnyShapeStyle(Color.secondary.opacity(0.25)))
+                        .frame(width: s == step ? 22 : 7, height: 7)
                 }
                 Spacer()
             }
             Text(step.title)
-                .font(.title2.bold())
+                .font(Theme.titleFont(20))
         }
         .padding(20)
     }
@@ -96,6 +98,7 @@ struct SetupWizardView: View {
         HStack {
             if step != .welcome && step != .done {
                 Button("Back") { goBack() }
+                    .buttonStyle(.bordered)
             }
             Spacer()
             if step == .done {
@@ -103,11 +106,13 @@ struct SetupWizardView: View {
                     Task { await appState.refresh() }
                     dismiss()
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.aurora)
+                .fixedSize()
                 .keyboardShortcut(.defaultAction)
             } else {
                 Button("Continue") { goForward() }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.aurora)
+                    .fixedSize()
                     .disabled(!canContinue)
                     .keyboardShortcut(.defaultAction)
             }
@@ -204,7 +209,8 @@ struct SetupWizardView: View {
                     Text(message)
                         .foregroundStyle(.secondary)
                     Button("Install BepInEx") { Task { await runInstallBepInEx() } }
-                        .buttonStyle(.borderedProminent)
+                        .buttonStyle(.aurora)
+                        .fixedSize()
                 }
             case .success(let message), .skipped(let message):
                 Label(message, systemImage: "checkmark.circle.fill")
@@ -232,7 +238,8 @@ struct SetupWizardView: View {
                     Text(message)
                         .foregroundStyle(.secondary)
                     Button("Configure Steam") { Task { await runConfigureSteam() } }
-                        .buttonStyle(.borderedProminent)
+                        .buttonStyle(.aurora)
+                        .fixedSize()
                 }
             case .success(let message), .skipped(let message):
                 Label(message, systemImage: "checkmark.circle.fill")

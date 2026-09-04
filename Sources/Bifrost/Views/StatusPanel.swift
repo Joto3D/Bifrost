@@ -1,7 +1,9 @@
 import SwiftUI
 
-/// Home tab content: shows the four setup prerequisites and, once wiring
-/// lands in a later phase, the actual play buttons.
+/// Home tab content: a "launcher hero" layout — the game title row, the
+/// four setup prerequisites as a compact status grid, the profile picker,
+/// and the big Play buttons. All logic is unchanged from the original
+/// stacked-list layout; only the presentation is reorganized.
 struct StatusPanel: View {
     private struct PendingProfileSwitch: Identifiable {
         let id = UUID()
@@ -28,130 +30,30 @@ struct StatusPanel: View {
     @State private var pendingMissingMods: PendingMissingMods?
 
     var body: some View {
-        VStack(spacing: 24) {
-            GroupBox("Setup Status") {
-                VStack(alignment: .leading, spacing: 14) {
-                    StatusRow(
-                        title: "Valheim found",
-                        ok: appState.status.gameFound != nil,
-                        subtitle: appState.status.gameFound?.path ?? "Could not locate Valheim via Steam"
-                    )
-                    Divider()
-                    StatusRow(
-                        title: "BepInEx installed",
-                        ok: appState.status.bepinexInstalled,
-                        subtitle: appState.status.bepinexInstalled
-                            ? "Mod loader is present"
-                            : "BepInEx not installed"
-                    )
-                    Divider()
-                    StatusRow(
-                        title: "Rosetta 2 available",
-                        ok: appState.status.rosettaOK,
-                        subtitle: appState.status.rosettaOK
-                            ? "x86_64 translation works"
-                            : "Rosetta 2 is not installed"
-                    )
-                    Divider()
-                    StatusRow(
-                        title: "Steam launch options configured",
-                        ok: appState.status.steamConfigured,
-                        subtitle: appState.status.steamConfigured
-                            ? "Launch options route through Bifrost"
-                            : "Steam launch options not set"
-                    )
-                }
-                .padding(8)
+        VStack(spacing: Theme.Spacing.xl) {
+            titleRow
+
+            statusGrid
+
+            VStack(spacing: Theme.Spacing.s) {
+                profileRow
+                Text(modsSummaryLine)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
 
-            Text(modsSummaryLine)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            Spacer(minLength: 0)
 
-            profileRow
+            playSection
 
-            Button {
-                Task { await appState.refresh() }
-            } label: {
-                if appState.isRefreshing {
-                    ProgressView()
-                        .controlSize(.small)
-                        .frame(maxWidth: .infinity)
-                } else {
-                    Label("Refresh", systemImage: "arrow.clockwise")
-                        .frame(maxWidth: .infinity)
-                }
-            }
-            .disabled(appState.isRefreshing)
-
-            HStack(spacing: 16) {
-                Button {
-                    play(modded: true)
-                } label: {
-                    Label("Play Modded", systemImage: "shippingbox.fill")
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 8)
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(!appState.status.readyToPlay || isLaunching)
-                .help(appState.status.readyToPlay ? "" : "Finish setup above before playing modded")
-
-                Button {
-                    play(modded: false)
-                } label: {
-                    Label("Play Vanilla", systemImage: "play.fill")
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 8)
-                }
-                .buttonStyle(.bordered)
-                .disabled(appState.status.gameFound == nil || isLaunching)
-            }
-
-            if let launchStatusLine {
-                HStack(spacing: 8) {
-                    if isLaunching {
-                        ProgressView()
-                            .controlSize(.small)
-                    }
-                    Text(launchStatusLine)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    if isLaunching {
-                        Button("Cancel", action: cancelLaunch)
-                            .font(.caption)
-                            .buttonStyle(.plain)
-                            .foregroundStyle(.blue)
-                    }
-                }
-            }
-
-            HStack(spacing: 16) {
-                Button {
-                    if let gameDir = appState.status.gameFound {
-                        Launcher.openPluginsFolder(gameDir: gameDir)
-                    }
-                } label: {
-                    Label("Open Plugins Folder", systemImage: "folder")
-                        .frame(maxWidth: .infinity)
-                }
-                .disabled(appState.status.gameFound == nil)
-
-                Button {
-                    if let gameDir = appState.status.gameFound {
-                        Launcher.openBepInExLog(gameDir: gameDir)
-                    }
-                } label: {
-                    Label("Open BepInEx Log", systemImage: "doc.text")
-                        .frame(maxWidth: .infinity)
-                }
-                .disabled(appState.status.gameFound == nil)
-            }
+            footerMenu
         }
-        .padding(24)
-        .frame(maxWidth: 520)
+        .padding(Theme.Spacing.xl)
+        .frame(maxWidth: 540)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .animation(Theme.settle, value: launchStatusLine)
+        .animation(Theme.settle, value: appState.status)
         .task {
             await appState.refresh()
         }
@@ -187,8 +89,92 @@ struct StatusPanel: View {
         }
     }
 
+    // MARK: - Title row
+
+    private var titleRow: some View {
+        HStack(alignment: .center, spacing: Theme.Spacing.m) {
+            ZStack {
+                Circle()
+                    .fill(Theme.night.opacity(0.5))
+                Image(systemName: "shield.lefthalf.filled")
+                    .font(.system(size: 22, weight: .semibold))
+                    .foregroundStyle(Theme.auroraGradient)
+            }
+            .frame(width: 48, height: 48)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Valheim")
+                    .font(Theme.titleFont(24))
+                Text(gameCaption)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+
+            Spacer(minLength: 0)
+
+            Button {
+                Task { await appState.refresh() }
+            } label: {
+                if appState.isRefreshing {
+                    ProgressView()
+                        .controlSize(.small)
+                        .frame(width: 28, height: 28)
+                } else {
+                    Image(systemName: "arrow.clockwise")
+                        .frame(width: 28, height: 28)
+                }
+            }
+            .buttonStyle(.borderless)
+            .disabled(appState.isRefreshing)
+            .help("Refresh setup status")
+        }
+    }
+
+    private var gameCaption: String {
+        appState.status.gameFound?.path ?? "Not detected — Bifrost looks via Steam's library"
+    }
+
+    // MARK: - Status grid
+
+    private var statusGrid: some View {
+        LazyVGrid(columns: [GridItem(.flexible(), spacing: Theme.Spacing.m), GridItem(.flexible())], spacing: Theme.Spacing.m) {
+            StatusPillCard(
+                title: "Valheim found",
+                ok: appState.status.gameFound != nil,
+                subtitle: appState.status.gameFound != nil ? "Located via Steam" : "Could not locate Valheim",
+                systemImage: "magnifyingglass"
+            )
+            StatusPillCard(
+                title: "BepInEx installed",
+                ok: appState.status.bepinexInstalled,
+                subtitle: appState.status.bepinexInstalled ? "Mod loader present" : "Not installed",
+                systemImage: "puzzlepiece.extension"
+            )
+            StatusPillCard(
+                title: "Rosetta 2",
+                ok: appState.status.rosettaOK,
+                subtitle: appState.status.rosettaOK ? "x86_64 translation works" : "Not installed",
+                systemImage: "cpu"
+            )
+            StatusPillCard(
+                title: "Steam configured",
+                ok: appState.status.steamConfigured,
+                subtitle: appState.status.steamConfigured ? "Routes through Bifrost" : "Launch options not set",
+                systemImage: "gearshape.2"
+            )
+        }
+    }
+
+    // MARK: - Profile row
+
     private var profileRow: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: Theme.Spacing.s) {
+            Image(systemName: "person.2.crop.square.stack")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
             Picker("Profile", selection: profileSelection) {
                 ForEach(appState.profiles.profiles.sorted(by: { $0.name < $1.name })) { profile in
                     Text(profile.name).tag(profile.id as UUID?)
@@ -217,6 +203,9 @@ struct StatusPanel: View {
 
             Spacer()
         }
+        .padding(.horizontal, Theme.Spacing.m)
+        .padding(.vertical, Theme.Spacing.s)
+        .bifrostCard(cornerRadius: Theme.Radius.row)
     }
 
     private var profileSelection: Binding<UUID?> {
@@ -234,6 +223,83 @@ struct StatusPanel: View {
         let enabledCount = active.mods.filter { $0.enabled }.count
         return "\(enabledCount) mod\(enabledCount == 1 ? "" : "s") enabled"
     }
+
+    // MARK: - Play section
+
+    private var playSection: some View {
+        VStack(spacing: Theme.Spacing.m) {
+            Button {
+                play(modded: true)
+            } label: {
+                Label("Play Modded", systemImage: "shippingbox.fill")
+            }
+            .buttonStyle(.aurora)
+            .disabled(!appState.status.readyToPlay || isLaunching)
+            .help(appState.status.readyToPlay ? "" : "Finish setup above before playing modded")
+
+            Button {
+                play(modded: false)
+            } label: {
+                Label("Play Vanilla", systemImage: "play.fill")
+            }
+            .buttonStyle(.quiet)
+            .disabled(appState.status.gameFound == nil || isLaunching)
+
+            if let launchStatusLine {
+                HStack(spacing: 8) {
+                    if isLaunching {
+                        ProgressView()
+                            .controlSize(.small)
+                    }
+                    Text(launchStatusLine)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    if isLaunching {
+                        Button("Cancel", action: cancelLaunch)
+                            .font(.caption)
+                            .buttonStyle(.plain)
+                            .foregroundStyle(.blue)
+                    }
+                }
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+    }
+
+    // MARK: - Footer menu
+
+    private var footerMenu: some View {
+        HStack {
+            Spacer()
+            Menu {
+                Button {
+                    if let gameDir = appState.status.gameFound {
+                        Launcher.openPluginsFolder(gameDir: gameDir)
+                    }
+                } label: {
+                    Label("Open Plugins Folder", systemImage: "folder")
+                }
+                .disabled(appState.status.gameFound == nil)
+
+                Button {
+                    if let gameDir = appState.status.gameFound {
+                        Launcher.openBepInExLog(gameDir: gameDir)
+                    }
+                } label: {
+                    Label("Open BepInEx Log", systemImage: "doc.text")
+                }
+                .disabled(appState.status.gameFound == nil)
+            } label: {
+                Label("More", systemImage: "ellipsis.circle")
+                    .font(.caption)
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+        }
+    }
+
+    // MARK: - Logic (unchanged)
 
     private func profileSwitchMessage(for preview: ProfileStore.ApplyPreview) -> String {
         var lines: [String] = []
@@ -362,32 +428,6 @@ struct StatusPanel: View {
             return "Steam didn't start in time — make sure it's installed, then try again."
         case .launchNotConfirmed(let hint):
             return hint
-        }
-    }
-}
-
-private struct StatusRow: View {
-    let title: String
-    let ok: Bool
-    let subtitle: String
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            Image(systemName: ok ? "checkmark.circle.fill" : "xmark.circle.fill")
-                .foregroundStyle(ok ? .green : .red)
-                .font(.system(size: 18))
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(.headline)
-                Text(subtitle)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-                    .truncationMode(.middle)
-            }
-
-            Spacer()
         }
     }
 }

@@ -87,6 +87,7 @@ struct ProfilesSheetView: View {
             }
         }
         .frame(minWidth: 480, minHeight: 360)
+        .presentationBackground(.regularMaterial)
         .confirmationDialog(
             "Delete \(pendingDelete?.name ?? "")?",
             isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }),
@@ -138,12 +139,7 @@ struct ProfilesSheetView: View {
                     Text(profile.name)
                         .font(.body.weight(.semibold))
                     if isActive {
-                        Text("Active")
-                            .font(.caption2.weight(.semibold))
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(.green.opacity(0.2), in: Capsule())
-                            .foregroundStyle(.green)
+                        AuroraBadge(text: "Active", systemImage: "checkmark")
                     }
                 }
                 let enabledCount = profile.mods.filter { $0.enabled }.count
