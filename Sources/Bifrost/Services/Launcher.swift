@@ -22,8 +22,9 @@ enum Launcher {
     /// several times as the launch progresses; the phase returned by
     /// `play` itself is always the last one reported.
     enum LaunchPhase: Sendable, Equatable {
-        /// Steam wasn't running; `open -a Steam` was just issued.
-        case startingSteam
+        /// Steam wasn't running; `open -a Steam` (or its silent variant,
+        /// see `silent`) was just issued.
+        case startingSteam(silent: Bool)
         /// Steam's process is up; waiting for it to finish its own startup
         /// before handing it a launch request.
         case waitingForSteam
@@ -63,8 +64,11 @@ enum Launcher {
     /// used by `--check` so verification never triggers a real launch or
     /// opens a `steam://` URL.
     static func plan(modded: Bool) -> [PlanStep] {
-        [
-            PlanStep(description: "Ensure Steam is running (open -a Steam if needed) and wait for it to finish starting up"),
+        let steamStepDescription = startSteamSilentlyPreference()
+            ? "Ensure Steam is running (open -a Steam --args -silent if needed, so its window stays hidden) and wait for it to finish starting up"
+            : "Ensure Steam is running (open -a Steam if needed) and wait for it to finish starting up"
+        return [
+            PlanStep(description: steamStepDescription),
             PlanStep(description: "Write \"\(modded ? "modded" : "vanilla")\" to \(modeFileURL.path)"),
             PlanStep(description: "Open \(launchURL.absoluteString) via NSWorkspace"),
             PlanStep(description: "Watch \(SteamLogWatcher.defaultLogURL.path) for GameAction progress on AppID \(GameLocator.valheimAppID) — retry the URL once if nothing appears, and flag any Steam dialog that needs a response"),
@@ -111,9 +115,10 @@ enum Launcher {
             return true
         }
 
-        onPhase(.startingSteam)
+        let silent = startSteamSilentlyPreference()
+        onPhase(.startingSteam(silent: silent))
         let startOffset = SteamLogWatcher.currentOffset()
-        _ = try? await ShellRunner.run("/usr/bin/open", ["-a", "Steam"])
+        _ = try? await ShellRunner.run("/usr/bin/open", openSteamArguments(silentPreference: silent))
 
         let deadline = Date().addingTimeInterval(timeout)
         var processAliveSince: Date?
@@ -237,6 +242,28 @@ enum Launcher {
     }
 
     // MARK: - Shared helpers
+
+    /// UserDefaults key backing "Start Steam silently in the background" in
+    /// Settings (see `SettingsView`). Defaults to on — most players never
+    /// need to see Steam's own window just to launch a game through it.
+    static let startSteamSilentlyDefaultsKey = "startSteamSilently"
+
+    /// Current value of the "Start Steam silently" preference, defaulting
+    /// to `true` when the user has never touched the setting.
+    private static func startSteamSilentlyPreference() -> Bool {
+        let defaults = UserDefaults.standard
+        guard defaults.object(forKey: startSteamSilentlyDefaultsKey) != nil else { return true }
+        return defaults.bool(forKey: startSteamSilentlyDefaultsKey)
+    }
+
+    /// Arguments to `/usr/bin/open` for starting Steam, honoring the
+    /// silent-start preference. Pure — takes the preference value directly
+    /// rather than reading `UserDefaults` itself — so `--check` can assert
+    /// the silent flag plumbs through to the right arguments without
+    /// spawning any process.
+    static func openSteamArguments(silentPreference: Bool) -> [String] {
+        silentPreference ? ["-a", "Steam", "--args", "-silent"] : ["-a", "Steam"]
+    }
 
     /// How often stages 1 and 3 poll while waiting.
     private static let pollInterval: UInt64 = 1_000_000_000

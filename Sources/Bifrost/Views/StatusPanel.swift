@@ -348,8 +348,8 @@ struct StatusPanel: View {
 
     private static func describe(_ phase: Launcher.LaunchPhase) -> String {
         switch phase {
-        case .startingSteam:
-            return "Starting Steam…"
+        case .startingSteam(let silent):
+            return silent ? "Starting Steam in the background…" : "Starting Steam…"
         case .waitingForSteam:
             return "Waiting for Steam…"
         case .launching:

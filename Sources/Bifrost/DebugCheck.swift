@@ -416,6 +416,16 @@ enum DebugCheck {
         let readinessAbsent = !SteamLaunchLogParser.containsStartupCompletion(dropped)
         print("startup-completion detection: present -> \(readinessDetected), absent in unrelated lines -> \(readinessAbsent) -> \((readinessDetected && readinessAbsent) ? "PASS" : "FAIL")")
 
+        // Pure command-construction check: proves the "Start Steam
+        // silently" preference plumbs through to the right `open`
+        // arguments in both states, without spawning any process.
+        let silentArgs = Launcher.openSteamArguments(silentPreference: true)
+        let plainArgs = Launcher.openSteamArguments(silentPreference: false)
+        let silentArgsOK = silentArgs == ["-a", "Steam", "--args", "-silent"]
+        let plainArgsOK = plainArgs == ["-a", "Steam"]
+        print("openSteamArguments(silentPreference: true) -> \(silentArgs) -> \(silentArgsOK ? "PASS" : "FAIL")")
+        print("openSteamArguments(silentPreference: false) -> \(plainArgs) -> \(plainArgsOK ? "PASS" : "FAIL")")
+
         print("")
         let valheimRunning = (try? await ShellRunner.run("/usr/bin/pgrep", ["-x", "Valheim"]))?.status == 0
         let steamRunning = (try? await ShellRunner.run("/usr/bin/pgrep", ["-x", "steam_osx"]))?.status == 0

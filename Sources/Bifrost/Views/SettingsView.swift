@@ -13,6 +13,7 @@ struct SettingsView: View {
 
     @Environment(AppState.self) private var appState
     @State private var indexRefreshState: IndexRefreshState = .idle
+    @AppStorage(Launcher.startSteamSilentlyDefaultsKey) private var startSteamSilently = true
 
     var body: some View {
         Form {
@@ -21,6 +22,13 @@ struct SettingsView: View {
                 pathRow(title: "Bifrost app support folder", url: bifrostSupportDir)
                 pathRow(title: "Launch wrapper script", url: wrapperScriptURL)
                 pathRow(title: "Steam launch config (localconfig.vdf)", url: SteamConfigurator.realLocalConfigURL())
+            }
+
+            Section("Launch") {
+                Toggle("Start Steam silently in the background", isOn: $startSteamSilently)
+                Text("When Bifrost needs to start Steam, it starts minimized without opening the Steam window. Steam may still show windows for logins or client updates.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section("Setup") {
