@@ -28,6 +28,9 @@ public partial class HomeViewModel : ViewModelBase
     [ObservableProperty] private bool _isInstallingBepInEx;
     [ObservableProperty] private string? _bannerProgressLine;
 
+    /// <summary>"Saves last backed up: …" caption shown under the Play buttons — see <see cref="AppServices.SaveBackup"/>.</summary>
+    [ObservableProperty] private string _lastBackedUpCaption = "Saves last backed up: never";
+
     public ObservableCollection<Profile> Profiles { get; } = new();
 
     [ObservableProperty]
@@ -103,11 +106,41 @@ public partial class HomeViewModel : ViewModelBase
             StatusMessage = GameFound
                 ? (BepInExInstalled ? "Ready." : "Valheim found, but BepInEx isn't installed yet — install it from the Browse tab.")
                 : "Valheim wasn't found through Steam. Check Settings for the detected Steam root.";
+
+            await RefreshLastBackedUpCaptionAsync();
         }
         finally
         {
             IsBusy = false;
         }
+    }
+
+    /// <summary>Recomputes <see cref="LastBackedUpCaption"/> from the newest backup on disk (any reason, manual or automatic).</summary>
+    public async Task RefreshLastBackedUpCaptionAsync()
+    {
+        var last = await Task.Run(() => _services.SaveBackup.List().FirstOrDefault()?.Date);
+        LastBackedUpCaption = last is { } date ? $"Saves last backed up: {FormatRelative(date)}" : "Saves last backed up: never";
+    }
+
+    private static string FormatRelative(DateTime date)
+    {
+        var span = DateTime.Now - date;
+        if (span < TimeSpan.FromMinutes(1))
+        {
+            return "just now";
+        }
+        if (span < TimeSpan.FromHours(1))
+        {
+            var minutes = (int)span.TotalMinutes;
+            return $"{minutes} minute{(minutes == 1 ? "" : "s")} ago";
+        }
+        if (span < TimeSpan.FromDays(1))
+        {
+            var hours = (int)span.TotalHours;
+            return $"{hours} hour{(hours == 1 ? "" : "s")} ago";
+        }
+        var days = (int)span.TotalDays;
+        return $"{days} day{(days == 1 ? "" : "s")} ago";
     }
 
     [RelayCommand(CanExecute = nameof(CanPlay))]
@@ -126,15 +159,30 @@ public partial class HomeViewModel : ViewModelBase
         }
         try
         {
-            await Task.Run(() => Launcher.Play(modded, GameDir));
+            await Launcher.PlayAsync(
+                modded,
+                GameDir,
+                startSteamSilently: _services.Settings.StartSteamSilently,
+                backupSavesBeforeModdedLaunch: _services.Settings.BackupSavesBeforeModdedLaunch,
+                onPhase: phase => StatusMessage = Describe(phase));
             ModdedEnabled = modded;
             StatusMessage = $"Launched Steam ({(modded ? "modded" : "vanilla")}).";
+            await RefreshLastBackedUpCaptionAsync();
         }
         catch (Exception ex)
         {
             StatusMessage = $"Couldn't launch: {ex.Message}";
         }
     }
+
+    private static string Describe(Launcher.LaunchPhase phase) => phase switch
+    {
+        Launcher.LaunchPhase.BackingUpSaves => "Backing up saves…",
+        Launcher.LaunchPhase.StartingSteam => "Starting Steam…",
+        Launcher.LaunchPhase.WaitingForSteam => "Waiting for Steam to finish starting…",
+        Launcher.LaunchPhase.Launching => "Launching…",
+        _ => "Working…",
+    };
 
     /// <summary>
     /// The first-run banner's "Install BepInEx" action — reuses

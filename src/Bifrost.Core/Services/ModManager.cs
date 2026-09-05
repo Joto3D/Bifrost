@@ -1,5 +1,6 @@
 using System.IO.Compression;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using Bifrost.Core.Models;
 
@@ -21,6 +22,12 @@ namespace Bifrost.Core.Services;
 public sealed class ModManager
 {
     public sealed class ModManagerException(string message) : Exception(message);
+
+    /// <summary>Thrown by <see cref="InstallFromFileAsync"/> when the derived identity is already installed and the caller didn't ask to replace it.</summary>
+    public sealed class NameCollisionException(string fullName) : Exception($"{fullName} is already installed")
+    {
+        public string FullName { get; } = fullName;
+    }
 
     public abstract record ResolvedInstall
     {
@@ -361,7 +368,7 @@ public sealed class ModManager
 
     private static string ToForwardSlash(string path) => path.Replace(Path.DirectorySeparatorChar, '/').Replace('\\', '/');
 
-    private void RecordInstalledMod(string fullName, string version, List<string> files)
+    private void RecordInstalledMod(string fullName, string version, List<string> files, string source = "thunderstore")
     {
         var manifest = LoadManifest();
         manifest.Mods.RemoveAll(m => m.FullName == fullName);
@@ -371,8 +378,190 @@ public sealed class ModManager
             Version = version,
             Enabled = true,
             Files = files.OrderBy(f => f, StringComparer.Ordinal).ToList(),
+            Source = source,
         });
         Save(manifest);
+    }
+
+    // MARK: - Install from file
+
+    /// <summary>
+    /// A minimal, lenient decode of a Thunderstore-style manifest.json —
+    /// just enough to derive a stable identity and starting version for a
+    /// local install that happens to carry one. "author" isn't part of
+    /// Thunderstore's own documented schema, but some community packaging
+    /// tools include it anyway, so it's read when present and folded into
+    /// the derived full name the same way Thunderstore's own "Author-Name"
+    /// convention would.
+    /// </summary>
+    private sealed class LocalPackageManifest
+    {
+        [JsonPropertyName("name")]
+        public string? Name { get; set; }
+
+        [JsonPropertyName("version_number")]
+        public string? VersionNumber { get; set; }
+
+        [JsonPropertyName("author")]
+        public string? Author { get; set; }
+    }
+
+    /// <summary>
+    /// Replaces every character outside letters/digits with '-', collapses
+    /// runs of '-', and trims leading/trailing '-' — keeps a user-supplied
+    /// file name or a manifest's free-text name/author field safe to use as
+    /// a manifest full name and a BepInEx/plugins directory component.
+    /// </summary>
+    private static string SanitizeForFullName(string raw)
+    {
+        var result = new string(raw.Select(c => char.IsLetterOrDigit(c) ? c : '-').ToArray());
+        while (result.Contains("--", StringComparison.Ordinal))
+        {
+            result = result.Replace("--", "-");
+        }
+        result = result.Trim('-');
+        return result.Length == 0 ? "Mod" : result;
+    }
+
+    /// <summary>
+    /// Derives the manifest identity for a local install: if
+    /// <paramref name="payloadRoot"/> carries a parseable manifest.json with
+    /// a non-empty name, uses that (folded with author when present,
+    /// Thunderstore-"Author-Name" style; otherwise "Local-Name"), and its
+    /// version_number when present. Otherwise falls back to
+    /// "Local-&lt;sanitized fallbackStem&gt;" (the dropped-file or zip's own
+    /// file name) and version "0.0.0-local".
+    /// </summary>
+    private static (string FullName, string Version) ResolveLocalIdentity(string? payloadRoot, string fallbackStem)
+    {
+        if (payloadRoot is not null)
+        {
+            var manifestPath = Path.Combine(payloadRoot, "manifest.json");
+            if (File.Exists(manifestPath))
+            {
+                LocalPackageManifest? manifest = null;
+                try { manifest = JsonSerializer.Deserialize<LocalPackageManifest>(File.ReadAllText(manifestPath)); }
+                catch { /* fall through to the filename fallback below */ }
+
+                if (!string.IsNullOrEmpty(manifest?.Name))
+                {
+                    var sanitizedName = SanitizeForFullName(manifest.Name);
+                    var fullName = !string.IsNullOrEmpty(manifest.Author)
+                        ? $"{SanitizeForFullName(manifest.Author)}-{sanitizedName}"
+                        : $"Local-{sanitizedName}";
+                    var version = !string.IsNullOrEmpty(manifest.VersionNumber) ? manifest.VersionNumber : "0.0.0-local";
+                    return (fullName, version);
+                }
+            }
+        }
+        return ($"Local-{SanitizeForFullName(fallbackStem)}", "0.0.0-local");
+    }
+
+    /// <summary>
+    /// If <paramref name="fullName"/> is already installed, either throws
+    /// <see cref="NameCollisionException"/> (the caller should offer the
+    /// user a replace/skip choice) or, when <paramref name="replaceExisting"/>
+    /// is true, uninstalls the existing entry's files first so the fresh
+    /// install starts from a clean slate.
+    /// </summary>
+    private void PrepareForInstall(string fullName, string gameDir, bool replaceExisting)
+    {
+        if (!IsInstalled(fullName))
+        {
+            return;
+        }
+        if (!replaceExisting)
+        {
+            throw new NameCollisionException(fullName);
+        }
+        Uninstall(fullName, gameDir);
+    }
+
+    /// <summary>
+    /// Installs a mod from a local .zip or bare .dll file — the
+    /// Nexus/GitHub/anywhere path, for mods that never went through
+    /// Thunderstore at all. A .zip is extracted and mapped into gameDir with
+    /// the exact same r2modman-compatible heuristics <see cref="InstallModAsync"/>
+    /// uses (<see cref="MapPayload"/>): a BepInEx/ wrapper merges,
+    /// plugins/patchers/config/core subdirs map individually, and a flat
+    /// payload (including a Thunderstore-style zip carrying its own
+    /// manifest.json/icon.png) falls back to one BepInEx/plugins/&lt;fullName&gt;/
+    /// folder with Thunderstore's own metadata files filtered out. A bare
+    /// .dll is copied straight into its own BepInEx/plugins/&lt;stem&gt;/
+    /// folder.
+    ///
+    /// The installed identity is derived by <see cref="ResolveLocalIdentity"/>
+    /// and recorded with source "local" so <see cref="UpdatesAvailable"/>
+    /// skips it and <see cref="Uninstall"/>/<see cref="SetEnabled"/> work
+    /// exactly as they do for a Thunderstore install.
+    ///
+    /// If the derived identity collides with an already-installed mod,
+    /// throws <see cref="NameCollisionException"/> unless
+    /// <paramref name="replaceExisting"/> is true, in which case the
+    /// existing install is uninstalled first. On success, returns the
+    /// installed full name.
+    /// </summary>
+    public async Task<string> InstallFromFileAsync(string filePath, string gameDir, bool replaceExisting = false, Action<Progress>? onProgress = null)
+    {
+        var extension = Path.GetExtension(filePath).TrimStart('.').ToLowerInvariant();
+        return extension switch
+        {
+            "zip" => await InstallZipFileAsync(filePath, gameDir, replaceExisting, onProgress),
+            "dll" => await InstallDllFileAsync(filePath, gameDir, replaceExisting, onProgress),
+            _ => throw new ModManagerException($"{Path.GetFileName(filePath)} isn't a .zip or .dll file"),
+        };
+    }
+
+    private Task<string> InstallDllFileAsync(string filePath, string gameDir, bool replaceExisting, Action<Progress>? onProgress)
+    {
+        var (fullName, version) = ResolveLocalIdentity(null, Path.GetFileNameWithoutExtension(filePath));
+        PrepareForInstall(fullName, gameDir, replaceExisting);
+
+        onProgress?.Invoke(new Progress(ProgressStage.CopyingFiles, fullName));
+        var destDir = Path.Combine(gameDir, "BepInEx", "plugins", fullName);
+        Directory.CreateDirectory(destDir);
+        var destPath = Path.Combine(destDir, Path.GetFileName(filePath));
+        File.Copy(filePath, destPath, overwrite: true);
+        var relative = $"BepInEx/plugins/{fullName}/{Path.GetFileName(filePath)}";
+
+        RecordInstalledMod(fullName, version, new List<string> { relative }, source: "local");
+        onProgress?.Invoke(new Progress(ProgressStage.Done, fullName));
+        return Task.FromResult(fullName);
+    }
+
+    private async Task<string> InstallZipFileAsync(string filePath, string gameDir, bool replaceExisting, Action<Progress>? onProgress)
+    {
+        var zipStem = Path.GetFileNameWithoutExtension(filePath);
+        var workDir = Path.Combine(Path.GetTempPath(), $"Bifrost-LocalInstall-{Guid.NewGuid()}");
+        Directory.CreateDirectory(workDir);
+        try
+        {
+            onProgress?.Invoke(new Progress(ProgressStage.Extracting, zipStem));
+            var extractDir = Path.Combine(workDir, "extracted");
+            Directory.CreateDirectory(extractDir);
+            ZipFile.ExtractToDirectory(filePath, extractDir);
+
+            var payloadRoot = ResolvePayloadRoot(extractDir);
+            var (fullName, version) = ResolveLocalIdentity(payloadRoot, zipStem);
+
+            PrepareForInstall(fullName, gameDir, replaceExisting);
+
+            onProgress?.Invoke(new Progress(ProgressStage.CopyingFiles, fullName));
+            var writtenFiles = MapPayload(payloadRoot, gameDir, fullName);
+            if (writtenFiles.Count == 0)
+            {
+                throw new ModManagerException($"Extracted archive for {fullName} contained no recognizable mod files");
+            }
+
+            RecordInstalledMod(fullName, version, writtenFiles, source: "local");
+            onProgress?.Invoke(new Progress(ProgressStage.Done, fullName));
+            await Task.CompletedTask;
+            return fullName;
+        }
+        finally
+        {
+            try { Directory.Delete(workDir, recursive: true); } catch { /* best effort */ }
+        }
     }
 
     // MARK: - Uninstall
@@ -490,6 +679,10 @@ public sealed class ModManager
         var result = new List<UpdateInfo>();
         foreach (var mod in LoadManifest().Mods)
         {
+            if (mod.Source == "local")
+            {
+                continue; // never in the Thunderstore index under its derived local identity
+            }
             if (!byFullName.TryGetValue(mod.FullName, out var pkg))
             {
                 continue;
@@ -512,6 +705,10 @@ public sealed class ModManager
     {
         var mod = LoadManifest().Mods.FirstOrDefault(m => m.FullName == fullName)
             ?? throw new ModManagerException($"{fullName} is not installed");
+        if (mod.Source == "local")
+        {
+            throw new ModManagerException($"{fullName} was installed from a local file — there's no Thunderstore identity to update against");
+        }
         var package = index.FirstOrDefault(p => p.FullName == fullName)
             ?? throw new ModManagerException($"{fullName} was not found in the cached Thunderstore index");
         var latest = package.LatestVersion ?? throw new ModManagerException($"{fullName} has no published version in the index");

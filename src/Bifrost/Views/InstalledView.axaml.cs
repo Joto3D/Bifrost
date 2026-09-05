@@ -1,5 +1,7 @@
+using System.Linq;
 using Avalonia.Controls;
 using Avalonia.Interactivity;
+using Avalonia.Platform.Storage;
 using Bifrost.ViewModels;
 
 namespace Bifrost.Views;
@@ -16,6 +18,40 @@ public partial class InstalledView : UserControl
                 _ = vm.RefreshCommand.ExecuteAsync(null);
             }
         };
+    }
+
+    /// <summary>"Install from File…" — opens a native file picker for .zip/.dll and hands the chosen paths to <see cref="InstalledViewModel.InstallFilesAsync"/>. The whole-window drag-and-drop path in <c>MainWindow</c> reaches the same method directly.</summary>
+    private async void OnInstallFromFileClick(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is not InstalledViewModel vm)
+        {
+            return;
+        }
+        var topLevel = TopLevel.GetTopLevel(this);
+        if (topLevel is null)
+        {
+            return;
+        }
+
+        var files = await topLevel.StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+        {
+            Title = "Install mod from file",
+            AllowMultiple = true,
+            FileTypeFilter = new[]
+            {
+                new FilePickerFileType("Mod files (*.zip, *.dll)") { Patterns = new[] { "*.zip", "*.dll" } },
+            },
+        });
+
+        var paths = files
+            .Select(f => f.TryGetLocalPath())
+            .Where(p => p is not null)
+            .Select(p => p!)
+            .ToList();
+        if (paths.Count > 0)
+        {
+            await vm.InstallFilesAsync(paths);
+        }
     }
 
     private void OnManageProfilesClick(object? sender, RoutedEventArgs e)

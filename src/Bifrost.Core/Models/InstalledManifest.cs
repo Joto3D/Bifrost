@@ -45,5 +45,18 @@ public sealed class InstalledManifest
         /// entries in place.
         /// </summary>
         public List<string> Files { get; set; } = new();
+
+        /// <summary>
+        /// Where this mod came from: "thunderstore" for anything
+        /// resolved/installed against the Thunderstore index (Browse tab,
+        /// dependency resolution, updates), or "local" for a mod installed
+        /// from a file on disk (see <see cref="Services.ModManager.InstallFromFileAsync"/>)
+        /// — local mods are excluded from update checks since there's no
+        /// index entry to compare against. Missing from an older
+        /// manifest.json written before this field existed decodes as
+        /// "thunderstore" (the property initializer below), never fails to
+        /// load.
+        /// </summary>
+        public string Source { get; set; } = "thunderstore";
     }
 }

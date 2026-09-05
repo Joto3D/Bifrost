@@ -37,6 +37,25 @@ public static class BifrostPaths
     public static string PackageIndexCachePath => Path.Combine(AppDataDir, "package-index.json");
     public static string PackageIndexValidatorsPath => Path.Combine(AppDataDir, "package-index.validators.json");
 
+    /// <summary>Persisted user preferences (start Steam silently, back up saves before a modded launch, show the tray icon). See <see cref="AppSettingsStore"/>.</summary>
+    public static string SettingsPath => Path.Combine(AppDataDir, "settings.json");
+
+    /// <summary>Where <see cref="GameUpdateWatcher"/> persists the last-seen Steam build id between checks — the Windows counterpart of the macOS app's <c>UserDefaults</c> key.</summary>
+    public static string GameUpdateLastSeenPath => Path.Combine(AppDataDir, "game-update-lastseen.txt");
+
+    /// <summary>Where Bifrost keeps its own save-backup archives (see <see cref="SaveBackup"/>).</summary>
+    public static string SaveBackupsDir => Path.Combine(AppDataDir, "backups");
+
+    /// <summary>
+    /// The real Valheim save directory on Windows: <c>%UserProfile%\AppData\LocalLow\IronGate\Valheim</c>.
+    /// There is no <see cref="Environment.SpecialFolder"/> entry for "LocalLow" (Windows itself has no
+    /// registry/shell-API concept of it distinct from LocalAppData), so it's built from the user
+    /// profile root the same way Steam/most Unity games locate it.
+    /// </summary>
+    public static string ValheimSaveDir => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+        "AppData", "LocalLow", "IronGate", "Valheim");
+
     /// <summary>
     /// Resolves Steam's install root: <see cref="SteamRootEnvVar"/> first
     /// (for tests/overrides), then the registry
