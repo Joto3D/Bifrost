@@ -1,0 +1,144 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:Bifrost.ViewModels"
+        x:Class="Bifrost.Views.ServerJoinWindow"
+        x:DataType="vm:ServerJoinViewModel"
+        Title="Join a Server"
+        Width="620" Height="560"
+        WindowStartupLocation="CenterOwner">
+    <Grid Margin="20" RowDefinitions="*,Auto">
+
+        <!-- Step 1: choose target profile -->
+        <StackPanel Grid.Row="0" Spacing="14" IsVisible="{Binding IsChooseProfileStep}">
+            <TextBlock Text="Joining someone else's server goes smoother when your risky mods match what they run. Bifrost can switch you to a profile with those mods set aside first."
+                       TextWrapping="Wrap" Opacity="0.75" FontSize="12" />
+
+            <Border Background="{DynamicResource BifrostCardBackgroundBrush}" BorderBrush="{DynamicResource BifrostCardBorderBrush}" BorderThickness="1" CornerRadius="10" Padding="14">
+                <StackPanel Spacing="10">
+                    <TextBlock Text="TARGET PROFILE" FontSize="11" FontWeight="SemiBold" Opacity="0.6" LetterSpacing="1" />
+                    <RadioButton GroupName="target" Content="Create a new profile from my current mods" IsChecked="{Binding CreateNewProfile}" />
+                    <TextBlock Text="Recommended — leaves your regular profile untouched." Opacity="0.6" FontSize="11" Margin="24,-6,0,0" />
+                    <TextBox Text="{Binding NewProfileName}" IsEnabled="{Binding CreateNewProfile}" Margin="24,0,0,0" Width="240" HorizontalAlignment="Left" />
+
+                    <RadioButton GroupName="target" Content="Use an existing profile" IsChecked="{Binding !CreateNewProfile}" />
+                    <ComboBox ItemsSource="{Binding ExistingProfiles}" SelectedItem="{Binding SelectedExistingProfile}"
+                              DisplayMemberBinding="{Binding Name}" IsEnabled="{Binding !CreateNewProfile}" Margin="24,0,0,0" Width="240" HorizontalAlignment="Left" />
+                </StackPanel>
+            </Border>
+        </StackPanel>
+
+        <!-- Step 2: review plan -->
+        <ScrollViewer Grid.Row="0" IsVisible="{Binding IsReviewPlanStep}">
+            <StackPanel Spacing="14">
+                <TextBlock Text="No mods installed yet — nothing to plan." Opacity="0.6" IsVisible="{Binding PlanIsEmpty}" />
+
+                <Border Background="{DynamicResource BifrostCardBackgroundBrush}" BorderBrush="{DynamicResource BifrostCardBorderBrush}" BorderThickness="1" CornerRadius="10" Padding="14"
+                        IsVisible="{Binding HasKeepEnabled}">
+                    <StackPanel Spacing="8">
+                        <TextBlock Text="WILL STAY ENABLED" FontSize="11" FontWeight="SemiBold" Opacity="0.6" LetterSpacing="1" />
+                        <TextBlock Text="Client-only and server-sync mods — safe anywhere." Opacity="0.6" FontSize="11" />
+                        <ItemsControl ItemsSource="{Binding KeepEnabledItems}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate DataType="vm:ServerJoinItemViewModel">
+                                    <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,2">
+                                        <TextBlock Text="{Binding ClassGlyph}" FontSize="10" />
+                                        <TextBlock Text="{Binding FullName}" ToolTip.Tip="{Binding ClassTooltip}" />
+                                        <TextBlock Text="{Binding ClassLabel}" Opacity="0.5" FontSize="11" />
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </Border>
+
+                <Border Background="#1FF39C12" BorderBrush="#66F39C12" BorderThickness="1" CornerRadius="10" Padding="14"
+                        IsVisible="{Binding HasAddsItemsWarning}">
+                    <StackPanel Spacing="8">
+                        <TextBlock Text="ADDS ITEMS — WILL STAY ENABLED BY DEFAULT" FontSize="11" FontWeight="SemiBold" Opacity="0.8" LetterSpacing="1" />
+                        <TextBlock Text="Disabling one of these can hide or strand items already in your inventory. Put anything valuable in a chest first if you're not sure the server runs it."
+                                   Opacity="0.7" FontSize="11" TextWrapping="Wrap" />
+                        <ItemsControl ItemsSource="{Binding AddsItemsWarningItems}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate DataType="vm:ServerJoinItemViewModel">
+                                    <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,3">
+                                        <CheckBox IsChecked="{Binding Enabled}" Content="Keep enabled" ToolTip.Tip="{Binding ClassTooltip}" />
+                                        <TextBlock Text="{Binding FullName}" VerticalAlignment="Center" />
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </Border>
+
+                <Border Background="{DynamicResource BifrostCardBackgroundBrush}" BorderBrush="{DynamicResource BifrostCardBorderBrush}" BorderThickness="1" CornerRadius="10" Padding="14"
+                        IsVisible="{Binding HasDisable}">
+                    <StackPanel Spacing="8">
+                        <TextBlock Text="WILL BE DISABLED" FontSize="11" FontWeight="SemiBold" Opacity="0.6" LetterSpacing="1" />
+                        <TextBlock Text="World-altering or unrecognized mods — risky if the server doesn't run them too." Opacity="0.6" FontSize="11" TextWrapping="Wrap" />
+                        <ItemsControl ItemsSource="{Binding DisableItems}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate DataType="vm:ServerJoinItemViewModel">
+                                    <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,3">
+                                        <CheckBox IsChecked="{Binding Enabled}" Content="Keep enabled anyway" ToolTip.Tip="{Binding ClassTooltip}" />
+                                        <TextBlock Text="{Binding FullName}" VerticalAlignment="Center" />
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+        </ScrollViewer>
+
+        <!-- Step 3: apply -->
+        <StackPanel Grid.Row="0" Spacing="14" IsVisible="{Binding IsApplyStep}">
+            <StackPanel Spacing="10" IsVisible="{Binding !DidApply}">
+                <TextBlock Text="Applying will:" FontWeight="SemiBold" />
+                <TextBlock Text="1. Back up your current saves first (&quot;pre-server&quot;)" Opacity="0.75" FontSize="12" />
+                <TextBlock Text="{Binding TargetDescription, StringFormat='2. {0}'}" Opacity="0.75" FontSize="12" />
+                <TextBlock Text="3. Switch to that profile and reconcile enabled mods" Opacity="0.75" FontSize="12" />
+                <TextBlock Text="{Binding ErrorLine}" Foreground="#E05A5A" FontSize="12" TextWrapping="Wrap" IsVisible="{Binding ErrorLine, Converter={x:Static ObjectConverters.IsNotNull}}" />
+            </StackPanel>
+
+            <StackPanel Spacing="10" IsVisible="{Binding DidApply}">
+                <TextBlock Text="✓ Ready to join" FontSize="16" FontWeight="SemiBold" Foreground="#2ECC71" />
+                <TextBlock Text="{Binding BackupSummaryLine}" Opacity="0.7" FontSize="12" IsVisible="{Binding BackupSummaryLine, Converter={x:Static ObjectConverters.IsNotNull}}" />
+                <TextBlock Text="{Binding MissingSummaryLine}" Foreground="#F39C12" FontSize="12" IsVisible="{Binding MissingSummaryLine, Converter={x:Static ObjectConverters.IsNotNull}}" />
+            </StackPanel>
+        </StackPanel>
+
+        <!-- Footer buttons -->
+        <Grid Grid.Row="1" ColumnDefinitions="*,Auto,Auto" Margin="0,14,0,0">
+            <Button Grid.Column="1" Content="Back" Margin="0,0,10,0"
+                    IsVisible="{Binding IsReviewPlanStep}"
+                    Command="{Binding BackToChooseProfileCommand}" />
+            <Button Grid.Column="1" Content="Back" Margin="0,0,10,0"
+                    IsVisible="{Binding ShowBackOnApplyStep}"
+                    IsEnabled="{Binding !IsApplying}"
+                    Command="{Binding BackToReviewPlanCommand}" />
+
+            <Button Grid.Column="2" Content="Cancel"
+                    IsVisible="{Binding IsChooseProfileStep}"
+                    Command="{Binding CloseCommand}" />
+            <Button Grid.Column="2" Content="Next"
+                    IsVisible="{Binding IsChooseProfileStep}"
+                    Background="{DynamicResource BifrostAccentButtonFillBrush}" Foreground="White"
+                    Command="{Binding GoToReviewPlanCommand}" />
+            <Button Grid.Column="2" Content="Next"
+                    IsVisible="{Binding IsReviewPlanStep}"
+                    Background="{DynamicResource BifrostAccentButtonFillBrush}" Foreground="White"
+                    Command="{Binding GoToApplyCommand}" />
+            <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="10"
+                        IsVisible="{Binding ShowApplyFooterButtons}">
+                <ProgressBar IsIndeterminate="True" Width="16" Height="16" IsVisible="{Binding IsApplying}" VerticalAlignment="Center" />
+                <Button Content="Apply" IsVisible="{Binding !DidApply}" IsEnabled="{Binding !IsApplying}"
+                        Background="{DynamicResource BifrostAccentButtonFillBrush}" Foreground="White"
+                        Command="{Binding ApplyCommand}" />
+                <Button Content="Close" IsVisible="{Binding DidApply}" Command="{Binding CloseCommand}" />
+                <Button Content="Play Modded" IsVisible="{Binding DidApply}"
+                        Background="{DynamicResource BifrostAccentButtonFillBrush}" Foreground="White"
+                        Command="{Binding PlayModdedCommand}" />
+            </StackPanel>
+        </Grid>
+    </Grid>
+</Window>

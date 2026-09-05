@@ -1,5 +1,6 @@
 using System.IO.Compression;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using Bifrost.Core.Models;
 
@@ -21,6 +22,12 @@ namespace Bifrost.Core.Services;
 public sealed class ModManager
 {
     public sealed class ModManagerException(string message) : Exception(message);
+
+    /// <summary>Thrown by <see cref="InstallFromFileAsync"/> when the derived identity is already installed and the caller didn't ask to replace it.</summary>
+    public sealed class NameCollisionException(string fullName) : Exception($"{fullName} is already installed")
+    {
+        public string FullName { get; } = fullName;
+    }
 
     public abstract record ResolvedInstall
     {
@@ -50,12 +57,14 @@ public sealed class ModManager
 
     private readonly HttpClient _http;
     private readonly BepInExInstaller _bepInExInstaller;
+    private readonly NexusClient _nexusClient;
     public string ManifestPath { get; }
 
-    public ModManager(HttpClient? httpClient = null, BepInExInstaller? bepInExInstaller = null, string? manifestPath = null)
+    public ModManager(HttpClient? httpClient = null, BepInExInstaller? bepInExInstaller = null, string? manifestPath = null, NexusClient? nexusClient = null)
     {
         _http = httpClient ?? SharedHttpClient;
         _bepInExInstaller = bepInExInstaller ?? new BepInExInstaller();
+        _nexusClient = nexusClient ?? new NexusClient(_http);
         ManifestPath = manifestPath ?? BifrostPaths.ManifestPath;
     }
 
@@ -361,7 +370,7 @@ public sealed class ModManager
 
     private static string ToForwardSlash(string path) => path.Replace(Path.DirectorySeparatorChar, '/').Replace('\\', '/');
 
-    private void RecordInstalledMod(string fullName, string version, List<string> files)
+    private void RecordInstalledMod(string fullName, string version, List<string> files, string source = "thunderstore", int? nexusModId = null, int? nexusFileId = null)
     {
         var manifest = LoadManifest();
         manifest.Mods.RemoveAll(m => m.FullName == fullName);
@@ -371,8 +380,278 @@ public sealed class ModManager
             Version = version,
             Enabled = true,
             Files = files.OrderBy(f => f, StringComparer.Ordinal).ToList(),
+            Source = source,
+            NexusModId = nexusModId,
+            NexusFileId = nexusFileId,
         });
         Save(manifest);
+    }
+
+    // MARK: - Install from file
+
+    /// <summary>
+    /// A minimal, lenient decode of a Thunderstore-style manifest.json —
+    /// just enough to derive a stable identity and starting version for a
+    /// local install that happens to carry one. "author" isn't part of
+    /// Thunderstore's own documented schema, but some community packaging
+    /// tools include it anyway, so it's read when present and folded into
+    /// the derived full name the same way Thunderstore's own "Author-Name"
+    /// convention would.
+    /// </summary>
+    private sealed class LocalPackageManifest
+    {
+        [JsonPropertyName("name")]
+        public string? Name { get; set; }
+
+        [JsonPropertyName("version_number")]
+        public string? VersionNumber { get; set; }
+
+        [JsonPropertyName("author")]
+        public string? Author { get; set; }
+    }
+
+    /// <summary>
+    /// Replaces every character outside letters/digits with '-', collapses
+    /// runs of '-', and trims leading/trailing '-' — keeps a user-supplied
+    /// file name or a manifest's free-text name/author field safe to use as
+    /// a manifest full name and a BepInEx/plugins directory component.
+    /// </summary>
+    private static string SanitizeForFullName(string raw)
+    {
+        var result = new string(raw.Select(c => char.IsLetterOrDigit(c) ? c : '-').ToArray());
+        while (result.Contains("--", StringComparison.Ordinal))
+        {
+            result = result.Replace("--", "-");
+        }
+        result = result.Trim('-');
+        return result.Length == 0 ? "Mod" : result;
+    }
+
+    /// <summary>
+    /// Derives the manifest identity for a local install: if
+    /// <paramref name="payloadRoot"/> carries a parseable manifest.json with
+    /// a non-empty name, uses that (folded with author when present,
+    /// Thunderstore-"Author-Name" style; otherwise "Local-Name"), and its
+    /// version_number when present. Otherwise falls back to
+    /// "Local-&lt;sanitized fallbackStem&gt;" (the dropped-file or zip's own
+    /// file name) and version "0.0.0-local".
+    /// </summary>
+    private static (string FullName, string Version) ResolveLocalIdentity(string? payloadRoot, string fallbackStem)
+    {
+        if (payloadRoot is not null)
+        {
+            var manifestPath = Path.Combine(payloadRoot, "manifest.json");
+            if (File.Exists(manifestPath))
+            {
+                LocalPackageManifest? manifest = null;
+                try { manifest = JsonSerializer.Deserialize<LocalPackageManifest>(File.ReadAllText(manifestPath)); }
+                catch { /* fall through to the filename fallback below */ }
+
+                if (!string.IsNullOrEmpty(manifest?.Name))
+                {
+                    var sanitizedName = SanitizeForFullName(manifest.Name);
+                    var fullName = !string.IsNullOrEmpty(manifest.Author)
+                        ? $"{SanitizeForFullName(manifest.Author)}-{sanitizedName}"
+                        : $"Local-{sanitizedName}";
+                    var version = !string.IsNullOrEmpty(manifest.VersionNumber) ? manifest.VersionNumber : "0.0.0-local";
+                    return (fullName, version);
+                }
+            }
+        }
+        return ($"Local-{SanitizeForFullName(fallbackStem)}", "0.0.0-local");
+    }
+
+    /// <summary>
+    /// An explicit identity to record instead of
+    /// <see cref="ResolveLocalIdentity"/>'s manifest.json-or-filename
+    /// guessing — currently only used by the Nexus <c>nxm://</c> flow (see
+    /// <see cref="InstallFromNexusAsync"/>), which already knows its mod's
+    /// real name/author/version from Nexus's own API and has no use for a
+    /// payload's bundled manifest.json even when one happens to be present.
+    /// <see cref="NexusModId"/>/<see cref="NexusFileId"/> are recorded on the
+    /// manifest entry so <see cref="UpdatesAvailableAsync"/> can check back
+    /// with Nexus later.
+    /// </summary>
+    public sealed record IdentityOverride(string FullName, string Version, string Source, int? NexusModId = null, int? NexusFileId = null);
+
+    /// <summary>
+    /// If <paramref name="fullName"/> is already installed, either throws
+    /// <see cref="NameCollisionException"/> (the caller should offer the
+    /// user a replace/skip choice) or, when <paramref name="replaceExisting"/>
+    /// is true, uninstalls the existing entry's files first so the fresh
+    /// install starts from a clean slate.
+    /// </summary>
+    private void PrepareForInstall(string fullName, string gameDir, bool replaceExisting)
+    {
+        if (!IsInstalled(fullName))
+        {
+            return;
+        }
+        if (!replaceExisting)
+        {
+            throw new NameCollisionException(fullName);
+        }
+        Uninstall(fullName, gameDir);
+    }
+
+    /// <summary>
+    /// Installs a mod from a local .zip or bare .dll file — the
+    /// Nexus/GitHub/anywhere path, for mods that never went through
+    /// Thunderstore at all. A .zip is extracted and mapped into gameDir with
+    /// the exact same r2modman-compatible heuristics <see cref="InstallModAsync"/>
+    /// uses (<see cref="MapPayload"/>): a BepInEx/ wrapper merges,
+    /// plugins/patchers/config/core subdirs map individually, and a flat
+    /// payload (including a Thunderstore-style zip carrying its own
+    /// manifest.json/icon.png) falls back to one BepInEx/plugins/&lt;fullName&gt;/
+    /// folder with Thunderstore's own metadata files filtered out. A bare
+    /// .dll is copied straight into its own BepInEx/plugins/&lt;stem&gt;/
+    /// folder.
+    ///
+    /// The installed identity is derived by <see cref="ResolveLocalIdentity"/>
+    /// and recorded with source "local" so <see cref="UpdatesAvailable"/>
+    /// skips it and <see cref="Uninstall"/>/<see cref="SetEnabled"/> work
+    /// exactly as they do for a Thunderstore install.
+    ///
+    /// If the derived identity collides with an already-installed mod,
+    /// throws <see cref="NameCollisionException"/> unless
+    /// <paramref name="replaceExisting"/> is true, in which case the
+    /// existing install is uninstalled first. On success, returns the
+    /// installed full name.
+    /// </summary>
+    public async Task<string> InstallFromFileAsync(string filePath, string gameDir, bool replaceExisting = false, IdentityOverride? identityOverride = null, Action<Progress>? onProgress = null)
+    {
+        var extension = Path.GetExtension(filePath).TrimStart('.').ToLowerInvariant();
+        return extension switch
+        {
+            "zip" => await InstallZipFileAsync(filePath, gameDir, replaceExisting, identityOverride, onProgress),
+            "dll" => await InstallDllFileAsync(filePath, gameDir, replaceExisting, identityOverride, onProgress),
+            _ => throw new ModManagerException($"{Path.GetFileName(filePath)} isn't a .zip or .dll file"),
+        };
+    }
+
+    private Task<string> InstallDllFileAsync(string filePath, string gameDir, bool replaceExisting, IdentityOverride? identityOverride, Action<Progress>? onProgress)
+    {
+        var (fullName, version) = identityOverride is not null
+            ? (identityOverride.FullName, identityOverride.Version)
+            : ResolveLocalIdentity(null, Path.GetFileNameWithoutExtension(filePath));
+        PrepareForInstall(fullName, gameDir, replaceExisting);
+
+        onProgress?.Invoke(new Progress(ProgressStage.CopyingFiles, fullName));
+        var destDir = Path.Combine(gameDir, "BepInEx", "plugins", fullName);
+        Directory.CreateDirectory(destDir);
+        var destPath = Path.Combine(destDir, Path.GetFileName(filePath));
+        File.Copy(filePath, destPath, overwrite: true);
+        var relative = $"BepInEx/plugins/{fullName}/{Path.GetFileName(filePath)}";
+
+        RecordInstalledMod(fullName, version, new List<string> { relative }, source: identityOverride?.Source ?? "local", nexusModId: identityOverride?.NexusModId, nexusFileId: identityOverride?.NexusFileId);
+        onProgress?.Invoke(new Progress(ProgressStage.Done, fullName));
+        return Task.FromResult(fullName);
+    }
+
+    private async Task<string> InstallZipFileAsync(string filePath, string gameDir, bool replaceExisting, IdentityOverride? identityOverride, Action<Progress>? onProgress)
+    {
+        var zipStem = Path.GetFileNameWithoutExtension(filePath);
+        var workDir = Path.Combine(Path.GetTempPath(), $"Bifrost-LocalInstall-{Guid.NewGuid()}");
+        Directory.CreateDirectory(workDir);
+        try
+        {
+            onProgress?.Invoke(new Progress(ProgressStage.Extracting, zipStem));
+            var extractDir = Path.Combine(workDir, "extracted");
+            Directory.CreateDirectory(extractDir);
+            ZipFile.ExtractToDirectory(filePath, extractDir);
+
+            var payloadRoot = ResolvePayloadRoot(extractDir);
+            var (fullName, version) = identityOverride is not null
+                ? (identityOverride.FullName, identityOverride.Version)
+                : ResolveLocalIdentity(payloadRoot, zipStem);
+
+            PrepareForInstall(fullName, gameDir, replaceExisting);
+
+            onProgress?.Invoke(new Progress(ProgressStage.CopyingFiles, fullName));
+            var writtenFiles = MapPayload(payloadRoot, gameDir, fullName);
+            if (writtenFiles.Count == 0)
+            {
+                throw new ModManagerException($"Extracted archive for {fullName} contained no recognizable mod files");
+            }
+
+            RecordInstalledMod(fullName, version, writtenFiles, source: identityOverride?.Source ?? "local", nexusModId: identityOverride?.NexusModId, nexusFileId: identityOverride?.NexusFileId);
+            onProgress?.Invoke(new Progress(ProgressStage.Done, fullName));
+            await Task.CompletedTask;
+            return fullName;
+        }
+        finally
+        {
+            try { Directory.Delete(workDir, recursive: true); } catch { /* best effort */ }
+        }
+    }
+
+    // MARK: - Install from Nexus
+
+    /// <summary>
+    /// Installs a mod fetched via the <c>nxm://</c> "Mod Manager Download"
+    /// flow: downloads <paramref name="downloadUrl"/> (a resolved Nexus CDN
+    /// mirror — see <see cref="NexusClient.DownloadLinkAsync"/>) to a temp
+    /// file, then feeds it through the exact same
+    /// <see cref="InstallFromFileAsync"/> pipeline a local drag-and-drop zip
+    /// uses, with an <see cref="IdentityOverride"/> so the installed
+    /// identity is Nexus's own "&lt;author&gt;-&lt;name&gt;" (sanitized the
+    /// same way <see cref="ResolveLocalIdentity"/> sanitizes a
+    /// manifest.json's fields) and version, rather than anything guessed
+    /// from the downloaded archive — recorded with source "nexus" plus the
+    /// mod/file ids so <see cref="UpdatesAvailableAsync"/> can check back
+    /// with Nexus for a newer version later.
+    /// </summary>
+    public async Task<string> InstallFromNexusAsync(
+        Uri downloadUrl,
+        string gameDir,
+        string author,
+        string name,
+        string version,
+        int nexusModId,
+        int nexusFileId,
+        bool replaceExisting = false,
+        Action<Progress>? onProgress = null)
+    {
+        var fullName = $"{SanitizeForFullName(author)}-{SanitizeForFullName(name)}";
+
+        onProgress?.Invoke(new Progress(ProgressStage.Downloading, fullName));
+        var workDir = Path.Combine(Path.GetTempPath(), $"Bifrost-NexusInstall-{Guid.NewGuid()}");
+        Directory.CreateDirectory(workDir);
+        try
+        {
+            // Nexus's CDN URLs carry the file's real name (with extension)
+            // in their path even though the query string is what actually
+            // authenticates the request, so this is safe unlike a fully
+            // opaque URL would be; fall back to .zip (essentially every
+            // Nexus Valheim mod file) if that's ever not true.
+            var ext = Path.GetExtension(downloadUrl.LocalPath);
+            if (string.IsNullOrEmpty(ext))
+            {
+                ext = ".zip";
+            }
+            var stagedPath = Path.Combine(workDir, $"{fullName}{ext}");
+
+            using (var response = await _http.GetAsync(downloadUrl, HttpCompletionOption.ResponseHeadersRead))
+            {
+                if (!response.IsSuccessStatusCode)
+                {
+                    throw new ModManagerException($"Download failed with HTTP status {(int)response.StatusCode}");
+                }
+                await using var fileStream = File.Create(stagedPath);
+                await response.Content.CopyToAsync(fileStream);
+            }
+
+            return await InstallFromFileAsync(
+                stagedPath,
+                gameDir,
+                replaceExisting: replaceExisting,
+                identityOverride: new IdentityOverride(fullName, version, "nexus", nexusModId, nexusFileId),
+                onProgress: onProgress);
+        }
+        finally
+        {
+            try { Directory.Delete(workDir, recursive: true); } catch { /* best effort */ }
+        }
     }
 
     // MARK: - Uninstall
@@ -483,13 +762,38 @@ public sealed class ModManager
     /// Compares every installed mod's recorded version against index's
     /// current latest, returning one entry per mod that has a newer version
     /// available.
+    ///
+    /// Mods installed from a local file (source == "local") are never in the
+    /// Thunderstore index under their derived identity, so they're skipped
+    /// outright rather than compared. source == "nexus" entries are checked
+    /// separately and live, against Nexus's own API
+    /// (<see cref="NexusClient.ModInfoAsync"/>) rather than <paramref name="index"/>
+    /// — only when both a saved API key (see <see cref="WindowsCredentials"/>)
+    /// is configured AND the entry carries a recorded
+    /// <see cref="InstalledManifest.InstalledMod.NexusModId"/> (an older
+    /// nexus-sourced manifest entry might not); missing either skips that
+    /// entry silently, same as a local mod, rather than erroring the whole
+    /// check. Thunderstore behavior is otherwise unchanged.
     /// </summary>
-    public List<UpdateInfo> UpdatesAvailable(IReadOnlyList<ThunderstorePackage> index)
+    public async Task<List<UpdateInfo>> UpdatesAvailableAsync(IReadOnlyList<ThunderstorePackage> index)
     {
         var byFullName = index.ToDictionary(p => p.FullName);
         var result = new List<UpdateInfo>();
         foreach (var mod in LoadManifest().Mods)
         {
+            if (mod.Source == "nexus")
+            {
+                var nexusUpdate = await NexusUpdateInfoAsync(mod);
+                if (nexusUpdate is not null)
+                {
+                    result.Add(nexusUpdate);
+                }
+                continue;
+            }
+            if (mod.Source == "local")
+            {
+                continue; // never in the Thunderstore index under its derived local identity
+            }
             if (!byFullName.TryGetValue(mod.FullName, out var pkg))
             {
                 continue;
@@ -504,6 +808,32 @@ public sealed class ModManager
         return result;
     }
 
+    private async Task<UpdateInfo?> NexusUpdateInfoAsync(InstalledManifest.InstalledMod mod)
+    {
+        if (mod.NexusModId is not { } modId)
+        {
+            return null;
+        }
+        var key = WindowsCredentials.Read(WindowsCredentials.NexusApiKeyTarget);
+        if (key is null)
+        {
+            return null;
+        }
+        try
+        {
+            var info = await _nexusClient.ModInfoAsync(modId, key);
+            if (info.Version == mod.Version)
+            {
+                return null;
+            }
+            return new UpdateInfo(mod.FullName, mod.Version, info.Version);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     /// <summary>
     /// Uninstalls and reinstalls fullName at index's current latest version,
     /// preserving its enabled state.
@@ -512,6 +842,10 @@ public sealed class ModManager
     {
         var mod = LoadManifest().Mods.FirstOrDefault(m => m.FullName == fullName)
             ?? throw new ModManagerException($"{fullName} is not installed");
+        if (mod.Source == "local")
+        {
+            throw new ModManagerException($"{fullName} was installed from a local file — there's no Thunderstore identity to update against");
+        }
         var package = index.FirstOrDefault(p => p.FullName == fullName)
             ?? throw new ModManagerException($"{fullName} was not found in the cached Thunderstore index");
         var latest = package.LatestVersion ?? throw new ModManagerException($"{fullName} has no published version in the index");

@@ -11,14 +11,21 @@
         <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="12" Margin="0,0,0,12">
             <TextBlock Text="{Binding LoaderVersion, StringFormat='BepInEx loader: {0}', FallbackValue='BepInEx loader: not installed'}" VerticalAlignment="Center" />
             <Button Content="Refresh" Command="{Binding RefreshCommand}" />
+            <Button Content="Install from File…" Click="OnInstallFromFileClick" IsEnabled="{Binding !IsInstallingFromFile}" />
+            <Button Content="{Binding UpdatableCount, StringFormat='Update All ({0})'}" Command="{Binding UpdateAllCommand}"
+                    IsVisible="{Binding HasUpdatable}"
+                    Background="{DynamicResource BifrostAccentButtonFillBrush}" Foreground="White" />
             <Button Content="Manage profiles..." Click="OnManageProfilesClick" />
             <Button Content="Configs..." Click="OnManageConfigsClick" />
+            <ProgressBar IsIndeterminate="True" Width="16" Height="16" IsVisible="{Binding IsInstallingFromFile}" VerticalAlignment="Center" />
+            <TextBlock Text="{Binding UpdateAllProgressLine}" IsVisible="{Binding IsUpdatingAll}" Opacity="0.7" VerticalAlignment="Center" FontSize="12" />
         </StackPanel>
 
         <Grid Grid.Row="2">
             <StackPanel IsVisible="{Binding !HasMods}" Spacing="6" HorizontalAlignment="Center" VerticalAlignment="Center">
                 <TextBlock Text="No mods yet — find some in Browse" FontWeight="Medium" HorizontalAlignment="Center" />
                 <TextBlock Text="Installed mods, their versions, and their configs will show up here." Opacity="0.6" FontSize="12" HorizontalAlignment="Center" />
+                <TextBlock Text="Or drop a mod's .zip/.dll file anywhere in this window, or use &quot;Install from File…&quot; above." Opacity="0.6" FontSize="12" HorizontalAlignment="Center" />
             </StackPanel>
 
             <ListBox ItemsSource="{Binding Mods}" IsVisible="{Binding HasMods}" Background="Transparent">
@@ -43,6 +50,17 @@
                                         <Border Background="{DynamicResource BifrostAccentGradientBrush}" CornerRadius="999" Padding="6,1"
                                                 IsVisible="{Binding UpdateAvailable}">
                                             <TextBlock Text="Update" FontSize="10" FontWeight="SemiBold" Foreground="White" />
+                                        </Border>
+                                        <Border Background="{DynamicResource BifrostBadgeTintSoftBrush}" CornerRadius="999" Padding="6,1"
+                                                IsVisible="{Binding SourceChipText, Converter={x:Static ObjectConverters.IsNotNull}}">
+                                            <TextBlock Text="{Binding SourceChipText}" FontSize="10" Foreground="{DynamicResource BifrostSecondaryAccentBrush}" />
+                                        </Border>
+                                        <Border Background="{Binding ClassBadgeBrush}" CornerRadius="999" Padding="6,1"
+                                                ToolTip.Tip="{Binding ClassBadgeTooltip}">
+                                            <StackPanel Orientation="Horizontal" Spacing="3">
+                                                <TextBlock Text="{Binding ClassBadgeGlyph}" FontSize="9" VerticalAlignment="Center" />
+                                                <TextBlock Text="{Binding ClassBadgeLabel}" FontSize="10" Foreground="{Binding ClassBadgeTextBrush}" VerticalAlignment="Center" />
+                                            </StackPanel>
                                         </Border>
                                     </StackPanel>
                                     <TextBlock Text="{Binding LatestVersion, StringFormat='-> {0} available'}"
@@ -82,5 +100,23 @@
         </Grid>
 
         <TextBlock Grid.Row="3" Text="{Binding StatusMessage}" TextWrapping="Wrap" Opacity="0.7" FontSize="12" Margin="0,12,0,0" />
+
+        <!-- Name-collision confirmation overlay, shown while InstallFilesAsync is
+             mid-loop and the derived identity for a dropped/picked file is already
+             installed. See InstalledViewModel.RequestReplaceConfirmationAsync. -->
+        <Border Grid.Row="0" Grid.RowSpan="4" Background="#CC000000" IsVisible="{Binding IsConfirmingReplace}">
+            <Border Background="{DynamicResource BifrostCardBackgroundBrush}" BorderBrush="{DynamicResource BifrostCardBorderBrush}"
+                    BorderThickness="1" CornerRadius="10" Padding="20" MaxWidth="380" HorizontalAlignment="Center" VerticalAlignment="Center">
+                <StackPanel Spacing="14">
+                    <TextBlock Text="{Binding ReplaceConfirmFullName, StringFormat='{}{0} is already installed'}" FontWeight="SemiBold" TextWrapping="Wrap" />
+                    <TextBlock Text="Replacing removes its currently installed files before installing the new ones." Opacity="0.7" FontSize="12" TextWrapping="Wrap" />
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="10">
+                        <Button Content="Skip" Command="{Binding SkipReplaceCommand}" />
+                        <Button Content="Replace" Command="{Binding ConfirmReplaceCommand}"
+                                Background="{DynamicResource BifrostAccentButtonFillBrush}" Foreground="White" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+        </Border>
     </Grid>
 </UserControl>

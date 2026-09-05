@@ -1,8 +1,10 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:Bifrost.ViewModels"
+             xmlns:conv="using:Bifrost.Converters"
              x:Class="Bifrost.Views.SettingsView"
              x:DataType="vm:SettingsViewModel">
+    <Grid>
     <ScrollViewer>
         <StackPanel Margin="32" Spacing="24" MaxWidth="640" HorizontalAlignment="Left">
             <TextBlock Text="Settings" FontSize="24" FontWeight="SemiBold" />
@@ -22,6 +24,106 @@
                     <Button Content="Refresh paths" Command="{Binding RefreshPathsCommand}" />
                     <Button Content="Refresh Thunderstore index" Command="{Binding RefreshIndexCommand}" />
                 </StackPanel>
+            </StackPanel>
+
+            <StackPanel Spacing="8">
+                <TextBlock Text="LAUNCH" FontSize="12" FontWeight="SemiBold" Opacity="0.6" LetterSpacing="1" />
+                <Border Background="{DynamicResource BifrostCardBackgroundBrush}"
+                        BorderBrush="{DynamicResource BifrostCardBorderBrush}" BorderThickness="1"
+                        CornerRadius="10" Padding="16">
+                    <StackPanel Spacing="12">
+                        <StackPanel Spacing="2">
+                            <CheckBox Content="Start Steam silently in the background" IsChecked="{Binding StartSteamSilently}" />
+                            <TextBlock Text="When Bifrost needs to start Steam, it starts minimized without opening the Steam window. Steam may still show windows for logins or client updates."
+                                       Opacity="0.6" FontSize="11" TextWrapping="Wrap" Margin="26,0,0,0" />
+                        </StackPanel>
+                        <StackPanel Spacing="2">
+                            <CheckBox Content="Back up saves before modded launch" IsChecked="{Binding BackupSavesBeforeModdedLaunch}" />
+                            <TextBlock Text="If the newest automatic backup is more than 30 minutes old, Bifrost backs up worlds_local/characters_local before handing a modded launch off to Steam."
+                                       Opacity="0.6" FontSize="11" TextWrapping="Wrap" Margin="26,0,0,0" />
+                        </StackPanel>
+                        <StackPanel Spacing="2">
+                            <CheckBox Content="Show tray icon" IsChecked="{Binding ShowTrayIcon}" />
+                            <TextBlock Text="Adds a Bifrost tray icon for quick Play/profile actions without opening the main window."
+                                       Opacity="0.6" FontSize="11" TextWrapping="Wrap" Margin="26,0,0,0" />
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+
+            <StackPanel Spacing="8">
+                <TextBlock Text="BACKUPS" FontSize="12" FontWeight="SemiBold" Opacity="0.6" LetterSpacing="1" />
+                <Border Background="{DynamicResource BifrostCardBackgroundBrush}"
+                        BorderBrush="{DynamicResource BifrostCardBorderBrush}" BorderThickness="1"
+                        CornerRadius="10" Padding="16">
+                    <StackPanel Spacing="10">
+                        <StackPanel Orientation="Horizontal" Spacing="10">
+                            <Button Content="Back Up Now" Command="{Binding BackUpNowCommand}" IsEnabled="{Binding !IsBackingUpNow}" />
+                            <ProgressBar IsIndeterminate="True" Width="16" Height="16" IsVisible="{Binding IsBackingUpNow}" VerticalAlignment="Center" />
+                            <TextBlock Text="{Binding BackupStatusLine}" Opacity="0.7" FontSize="12" VerticalAlignment="Center" TextWrapping="Wrap" />
+                        </StackPanel>
+
+                        <TextBlock Text="No backups yet." Opacity="0.6" FontSize="12" IsVisible="{Binding !HasBackups}" />
+
+                        <ItemsControl ItemsSource="{Binding Backups}" IsVisible="{Binding HasBackups}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate DataType="vm:BackupRowViewModel">
+                                    <Grid ColumnDefinitions="*,Auto,Auto" Margin="0,3">
+                                        <StackPanel Grid.Column="0" Spacing="1">
+                                            <TextBlock Text="{Binding DateDisplay}" FontWeight="Medium" FontSize="12" />
+                                            <TextBlock Text="{Binding ReasonDisplay}" Opacity="0.6" FontSize="11" />
+                                        </StackPanel>
+                                        <TextBlock Grid.Column="1" Text="{Binding SizeDisplay}" Opacity="0.6" FontSize="11" VerticalAlignment="Center" Margin="0,0,10,0" />
+                                        <Button Grid.Column="2" Content="Restore"
+                                                Command="{Binding $parent[ItemsControl].((vm:SettingsViewModel)DataContext).RequestRestoreCommand}"
+                                                CommandParameter="{Binding}" Padding="8,3" FontSize="12" />
+                                    </Grid>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+
+                        <TextBlock Text="{Binding TotalBackupSize, StringFormat='Total size: {0}'}" IsVisible="{Binding HasBackups}" Opacity="0.6" FontSize="11" />
+
+                        <Button Content="Open backups folder" Command="{Binding OpenBackupsFolderCommand}" HorizontalAlignment="Left" />
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+
+            <StackPanel Spacing="8">
+                <TextBlock Text="NEXUS MODS" FontSize="12" FontWeight="SemiBold" Opacity="0.6" LetterSpacing="1" />
+                <Border Background="{DynamicResource BifrostCardBackgroundBrush}"
+                        BorderBrush="{DynamicResource BifrostCardBorderBrush}" BorderThickness="1"
+                        CornerRadius="10" Padding="16">
+                    <StackPanel Spacing="12">
+                        <Grid IsVisible="{Binding NexusKeySaved}" ColumnDefinitions="Auto,*,Auto">
+                            <TextBlock Grid.Column="0" Text="&#x2713;" Foreground="#2ECC71" FontWeight="Bold" Margin="0,0,8,0" />
+                            <TextBlock Grid.Column="1" Text="API key saved" VerticalAlignment="Center" />
+                            <Button Grid.Column="2" Content="Remove" Command="{Binding RemoveNexusApiKeyCommand}" />
+                        </Grid>
+                        <StackPanel Orientation="Horizontal" Spacing="10" IsVisible="{Binding !NexusKeySaved}">
+                            <TextBox Text="{Binding NexusApiKeyInput}" PlaceholderText="Nexus API key" PasswordChar="*" Width="260" />
+                            <Button Content="Save" Command="{Binding SaveNexusApiKeyCommand}" />
+                        </StackPanel>
+
+                        <StackPanel Orientation="Horizontal" Spacing="10">
+                            <Button Content="Validate" Command="{Binding ValidateNexusKeyCommand}" IsEnabled="{Binding NexusKeySaved}" />
+                            <ProgressBar IsIndeterminate="True" Width="16" Height="16" IsVisible="{Binding IsValidatingNexusKey}" VerticalAlignment="Center" />
+                            <TextBlock Text="{Binding NexusValidationLine}" FontSize="12" VerticalAlignment="Center" TextWrapping="Wrap"
+                                       Foreground="{Binding NexusValidationFailed, Converter={x:Static conv:StatusConverters.ErrorOrSecondaryBrush}}" />
+                        </StackPanel>
+
+                        <Button Content="Get your API key" Command="{Binding OpenNexusApiKeyPageCommand}" HorizontalAlignment="Left" />
+
+                        <TextBlock Text="On any Valheim mod page, click &quot;Mod Manager Download&quot; — Bifrost will catch it and install."
+                                   Opacity="0.6" FontSize="11" TextWrapping="Wrap" />
+
+                        <StackPanel Spacing="2">
+                            <CheckBox Content="Handle nxm:// Mod Manager Download links" IsChecked="{Binding EnableNxmProtocol}" />
+                            <TextBlock Text="Registers Bifrost as the Windows handler for Nexus's &quot;Mod Manager Download&quot; links (HKCU\Software\Classes\nxm). Turn off if another mod manager should handle them instead."
+                                       Opacity="0.6" FontSize="11" TextWrapping="Wrap" Margin="26,0,0,0" />
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
             </StackPanel>
 
             <StackPanel Spacing="8">
@@ -63,10 +165,28 @@
             <StackPanel Orientation="Horizontal" Spacing="10" Margin="0,8,0,0">
                 <Border Width="28" Height="28" CornerRadius="14" Background="{DynamicResource BifrostAccentGradientBrush}" />
                 <StackPanel>
-                    <TextBlock Text="Bifrost 1.0.0" FontWeight="SemiBold" />
+                    <TextBlock Text="Bifrost 1.1.0" FontWeight="SemiBold" />
                     <TextBlock Text="Launches Valheim through Steam with BepInEx mods." Opacity="0.6" FontSize="12" />
                 </StackPanel>
             </StackPanel>
         </StackPanel>
     </ScrollViewer>
+
+    <!-- Restore-confirmation overlay -->
+    <Border IsVisible="{Binding IsConfirmingRestore}" Background="#CC000000">
+        <Border Background="{DynamicResource BifrostCardBackgroundBrush}" BorderBrush="{DynamicResource BifrostCardBorderBrush}"
+                BorderThickness="1" CornerRadius="10" Padding="20" MaxWidth="400" HorizontalAlignment="Center" VerticalAlignment="Center">
+            <StackPanel Spacing="14">
+                <TextBlock Text="Restore this backup?" FontWeight="SemiBold" />
+                <TextBlock Text="{Binding PendingRestore.DateDisplay, StringFormat='Make sure Valheim is closed first. Your current saves will be backed up automatically, then replaced with the backup from {0}.'}"
+                           Opacity="0.7" FontSize="12" TextWrapping="Wrap" />
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="10">
+                    <Button Content="Cancel" Command="{Binding CancelRestoreCommand}" />
+                    <Button Content="Restore" Command="{Binding ConfirmRestoreCommand}"
+                            Background="{DynamicResource BifrostAccentButtonFillBrush}" Foreground="White" />
+                </StackPanel>
+            </StackPanel>
+        </Border>
+    </Border>
+    </Grid>
 </UserControl>

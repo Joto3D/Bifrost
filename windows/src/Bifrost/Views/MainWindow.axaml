@@ -17,47 +17,100 @@
         <vm:MainViewModel />
     </Design.DataContext>
 
-    <Grid ColumnDefinitions="220,*">
+    <Grid RowDefinitions="Auto,Auto,*">
 
-        <!-- Sidebar navigation: Home / Browse / Installed / Settings -->
-        <Border Grid.Column="0" Background="{DynamicResource BifrostSidebarBrush}">
-            <DockPanel Margin="0,20,0,0">
-                <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="8" Margin="20,0,0,24">
-                    <Border Width="10" Height="10" CornerRadius="5" Background="{DynamicResource BifrostAccentGradientBrush}" />
-                    <TextBlock Text="BIFROST"
-                               FontSize="16"
-                               FontWeight="Bold"
-                               Foreground="{DynamicResource BifrostAccentBrush}" />
-                </StackPanel>
-
-                <ListBox DockPanel.Dock="Top"
-                         ItemsSource="{Binding NavigationItems}"
-                         SelectedItem="{Binding SelectedItem}"
-                         Background="Transparent"
-                         Margin="10,0">
-                    <ListBox.ItemTemplate>
-                        <DataTemplate DataType="vm:NavigationItem">
-                            <TextBlock Text="{Binding Title}"
-                                       FontSize="14"
-                                       Padding="10,8" />
-                        </DataTemplate>
-                    </ListBox.ItemTemplate>
-                    <ListBox.Styles>
-                        <Style Selector="ListBoxItem">
-                            <Setter Property="CornerRadius" Value="8" />
-                            <Setter Property="Margin" Value="0,2" />
-                        </Style>
-                        <Style Selector="ListBoxItem:selected /template/ ContentPresenter">
-                            <Setter Property="Background" Value="{DynamicResource BifrostBadgeTintSoftBrush}" />
-                        </Style>
-                    </ListBox.Styles>
-                </ListBox>
-            </DockPanel>
+        <!-- Nexus Mods nxm:// install banner: a small non-blocking status
+             line while AppState-equivalent HandleNexusLinkAsync is running
+             (or just finished/failed). See MainViewModel. -->
+        <Border Grid.Row="0" IsVisible="{Binding NexusInstallStatusLine, Converter={x:Static ObjectConverters.IsNotNull}}"
+                Background="{DynamicResource BifrostCardBackgroundBrush}" BorderBrush="{DynamicResource BifrostCardBorderBrush}" BorderThickness="1"
+                CornerRadius="8" Padding="14,8" Margin="12,10,12,0">
+            <Grid ColumnDefinitions="Auto,*,Auto">
+                <ProgressBar Grid.Column="0" IsIndeterminate="True" Width="14" Height="14" IsVisible="{Binding IsInstallingFromNexus}" VerticalAlignment="Center" Margin="0,0,10,0" />
+                <TextBlock Grid.Column="1" Text="{Binding NexusInstallStatusLine}" FontSize="12" TextWrapping="Wrap" VerticalAlignment="Center" />
+                <Button Grid.Column="2" Content="&#x2715;" Command="{Binding DismissNexusInstallStatusCommand}"
+                        IsVisible="{Binding !IsInstallingFromNexus}"
+                        Background="Transparent" BorderThickness="0" Padding="4" VerticalAlignment="Center" />
+            </Grid>
         </Border>
 
-        <!-- Active page -->
-        <ContentControl Grid.Column="1" Content="{Binding CurrentPage}" />
+        <!-- Game-update banner: shown when GameUpdateWatcher detects Valheim's
+             Steam build changed since Bifrost last checked. See MainViewModel. -->
+        <Border Grid.Row="1" IsVisible="{Binding ShowGameUpdateBanner}"
+                Background="#26E6C13A" BorderBrush="#66E6C13A" BorderThickness="1"
+                CornerRadius="8" Padding="14,10" Margin="12,10,12,0">
+            <Grid ColumnDefinitions="Auto,*,Auto">
+                <TextBlock Grid.Column="0" Text="&#x26A0;" FontSize="16" VerticalAlignment="Top" Margin="0,0,10,0" />
+                <StackPanel Grid.Column="1" Spacing="4">
+                    <TextBlock Text="{Binding GameUpdateMessage}" FontWeight="SemiBold" TextWrapping="Wrap" FontSize="12" />
+                    <TextBlock Text="{Binding VerifyBepInExStatusLine}" IsVisible="{Binding VerifyBepInExStatusLine, Converter={x:Static ObjectConverters.IsNotNull}}"
+                               Opacity="0.7" FontSize="11" />
+                    <StackPanel Orientation="Horizontal" Spacing="8" Margin="0,4,0,0">
+                        <Button Content="Verify BepInEx" Command="{Binding VerifyBepInExCommand}" IsEnabled="{Binding !IsVerifyingBepInEx}" Padding="8,4" FontSize="12" />
+                        <Button Content="Check Mod Updates" Command="{Binding CheckModUpdatesCommand}" Padding="8,4" FontSize="12" />
+                    </StackPanel>
+                </StackPanel>
+                <Button Grid.Column="2" Content="&#x2715;" Command="{Binding DismissGameUpdateBannerCommand}"
+                        Background="Transparent" BorderThickness="0" Padding="4" VerticalAlignment="Top" />
+            </Grid>
+        </Border>
 
+        <Grid Grid.Row="2" ColumnDefinitions="220,*">
+
+            <!-- Sidebar navigation: Home / Browse / Installed / Settings -->
+            <Border Grid.Column="0" Background="{DynamicResource BifrostSidebarBrush}">
+                <DockPanel Margin="0,20,0,0">
+                    <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Spacing="8" Margin="20,0,0,24">
+                        <Border Width="10" Height="10" CornerRadius="5" Background="{DynamicResource BifrostAccentGradientBrush}" />
+                        <TextBlock Text="BIFROST"
+                                   FontSize="16"
+                                   FontWeight="Bold"
+                                   Foreground="{DynamicResource BifrostAccentBrush}" />
+                    </StackPanel>
+
+                    <ListBox DockPanel.Dock="Top"
+                             ItemsSource="{Binding NavigationItems}"
+                             SelectedItem="{Binding SelectedItem}"
+                             Background="Transparent"
+                             Margin="10,0">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate DataType="vm:NavigationItem">
+                                <TextBlock Text="{Binding Title}"
+                                           FontSize="14"
+                                           Padding="10,8" />
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                        <ListBox.Styles>
+                            <Style Selector="ListBoxItem">
+                                <Setter Property="CornerRadius" Value="8" />
+                                <Setter Property="Margin" Value="0,2" />
+                            </Style>
+                            <Style Selector="ListBoxItem:selected /template/ ContentPresenter">
+                                <Setter Property="Background" Value="{DynamicResource BifrostBadgeTintSoftBrush}" />
+                            </Style>
+                        </ListBox.Styles>
+                    </ListBox>
+                </DockPanel>
+            </Border>
+
+            <!-- Active page -->
+            <ContentControl Grid.Column="1" Content="{Binding CurrentPage}" />
+
+        </Grid>
+
+        <!-- Whole-window drag-and-drop overlay for installing mod files
+             regardless of which tab is active. See MainWindow.axaml.cs. -->
+        <Border Grid.Row="0" Grid.RowSpan="3" x:Name="DropOverlay" IsVisible="False"
+                Background="#CC000000" IsHitTestVisible="False">
+            <Border Background="{DynamicResource BifrostCardBackgroundBrush}" BorderBrush="{DynamicResource BifrostCardBorderBrush}"
+                    BorderThickness="1" CornerRadius="12" Padding="28" HorizontalAlignment="Center" VerticalAlignment="Center">
+                <StackPanel Spacing="10" HorizontalAlignment="Center">
+                    <TextBlock Text="&#x1F4E5;" FontSize="34" HorizontalAlignment="Center" />
+                    <TextBlock Text="Drop mod files to install" FontWeight="SemiBold" FontSize="16" HorizontalAlignment="Center" />
+                    <TextBlock Text=".zip or .dll" Opacity="0.7" FontSize="12" HorizontalAlignment="Center" />
+                </StackPanel>
+            </Border>
+        </Border>
     </Grid>
 
 </Window>

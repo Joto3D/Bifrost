@@ -14,6 +14,9 @@ public partial class ProfilesViewModel : ViewModelBase
 {
     private readonly AppServices _services;
 
+    /// <summary>Exposed so the view's code-behind can build/upload share codes (<see cref="ProfileShare"/>) and open the Import dialog against the same service instances.</summary>
+    public AppServices Services => _services;
+
     public ObservableCollection<Profile> Profiles { get; } = new();
 
     [ObservableProperty] private Profile? _selectedProfile;

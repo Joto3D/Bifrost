@@ -25,9 +25,28 @@ public partial class BrowseView : UserControl
             return;
         }
 
+        ShowPackageDetail(row.Package, vm);
+    }
+
+    /// <summary>"Surprise Me" dice — rolls a random well-rated, not-yet-installed mod and opens it exactly as "Details…" would, whether or not it currently has a visible row.</summary>
+    private void OnSurpriseMeClick(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is not BrowseViewModel vm)
+        {
+            return;
+        }
+        var pick = vm.RollSurpriseMe();
+        if (pick is not null)
+        {
+            ShowPackageDetail(pick, vm);
+        }
+    }
+
+    private void ShowPackageDetail(Bifrost.Core.Models.ThunderstorePackage package, BrowseViewModel vm)
+    {
         var window = new PackageDetailWindow
         {
-            DataContext = new PackageDetailViewModel(row.Package, vm.Services),
+            DataContext = new PackageDetailViewModel(package, vm.Services),
         };
 
         var topLevel = TopLevel.GetTopLevel(this);

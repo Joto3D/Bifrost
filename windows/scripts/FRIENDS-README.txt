@@ -58,6 +58,50 @@ Want a different look? Settings -> Appearance has six color themes to
 pick from.
 
 
+INSTALLING MODS FROM NEXUS MODS
+--------------------------------
+
+Some mods only live on Nexus Mods rather than Thunderstore. Bifrost can
+catch those too:
+
+  1. Go to Settings -> Nexus Mods, paste in your Nexus API key (get one
+     free from nexusmods.com -> your account -> API Access, or just
+     click the "Get your API key" button in Bifrost), and hit Save.
+  2. On any Valheim mod page on the Nexus Mods website, click
+     "Mod Manager Download" (NOT the manual download button).
+  3. Bifrost catches the link and installs the mod automatically — no
+     manual download, no unzipping.
+
+If you ever get a Windows prompt asking which app should open nxm://
+links, choose Bifrost.
+
+
+SHARING A MODLIST WITH FRIENDS
+-------------------------------
+
+Playing with friends goes smoother when everyone runs the same mods.
+From the Installed tab, click "Manage profiles...", pick a profile, and
+use "Copy Share Code" (or "Export to File..." for a file you can email
+or drop in Discord). Send that to a friend, who pastes it into their own
+Bifrost's "Import..." button — it reviews what it'll install before
+touching anything. This also works with r2modman/Thunderstore Mod
+Manager codes, in either direction.
+
+Heading to someone else's server for the first time? Try "Join a
+Server..." on the Home tab instead — it walks you through a safe modlist
+automatically (backing up your saves first) so risky world-altering mods
+don't get in your way.
+
+
+YOUR SAVES ARE BACKED UP AUTOMATICALLY
+----------------------------------------
+
+Bifrost quietly backs up your Valheim saves (worlds_local/characters_local)
+before every modded launch, and again before switching profiles or
+joining a server. You can see and restore any backup from Settings ->
+Backups — nothing is ever deleted without you choosing it.
+
+
 WHERE TO GET HELP
 ------------------
 
