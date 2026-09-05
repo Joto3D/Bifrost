@@ -5,6 +5,7 @@ import AppKit
 struct BifrostApp: App {
     @State private var appState = AppState()
     @State private var themeStore = ThemeStore()
+    @AppStorage(MenuBarPreference.showIconDefaultsKey) private var showMenuBarIcon = true
 
     init() {
         // Headless diagnostics escape hatch: `swift run Bifrost --check`
@@ -21,7 +22,7 @@ struct BifrostApp: App {
     }
 
     var body: some Scene {
-        WindowGroup("Bifrost") {
+        WindowGroup("Bifrost", id: "main") {
             MainWindow()
                 .environment(appState)
                 .environment(themeStore)
@@ -42,5 +43,15 @@ struct BifrostApp: App {
         }
         .defaultSize(width: 900, height: 600)
         .windowResizability(.contentMinSize)
+
+        // Quick-launch menu bar item — a convenience for Play/profile
+        // switching without raising the main window. `isInserted` mirrors
+        // the "Show menu bar icon" toggle in Settings; unlike the main
+        // window this needs no first-run gating, since it does nothing on
+        // its own besides existing.
+        MenuBarExtra("Bifrost", systemImage: "shield.lefthalf.filled", isInserted: $showMenuBarIcon) {
+            BifrostMenuBarContent()
+                .environment(appState)
+        }
     }
 }

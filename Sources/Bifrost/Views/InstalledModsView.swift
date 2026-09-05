@@ -51,6 +51,12 @@ struct InstalledModsView: View {
     @State private var configsListPresented = false
     @State private var configEditorTarget: BepInExConfig.DiscoveredConfig?
 
+    /// Drives the "Update All" toolbar button — set while
+    /// `UpdateAllRunner.run` is in flight, so the button/rows can't be
+    /// double-triggered mid-batch.
+    @State private var isUpdatingAll = false
+    @State private var updateAllProgressLine: String?
+
     var body: some View {
         VStack(spacing: 0) {
             header
@@ -67,6 +73,11 @@ struct InstalledModsView: View {
             guard !dropped.isEmpty else { return }
             appState.pendingFileDrop = []
             Task { await installFiles(dropped) }
+        }
+        .onChange(of: appState.requestModUpdateCheck) { _, requested in
+            guard requested else { return }
+            appState.requestModUpdateCheck = false
+            Task { await loadIndexAndCheckUpdates(force: true) }
         }
         .confirmationDialog(
             "Remove \(pendingRemoval?.fullName ?? "")?",
@@ -136,13 +147,17 @@ struct InstalledModsView: View {
 
             Spacer()
 
-            if let statusLine {
+            if let updateAllProgressLine {
+                Text(updateAllProgressLine)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else if let statusLine {
                 Text(statusLine)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
 
-            if isInstallingFromFile {
+            if isInstallingFromFile || isUpdatingAll {
                 ProgressView()
                     .controlSize(.small)
             }
@@ -159,7 +174,16 @@ struct InstalledModsView: View {
             } label: {
                 Label("Check for Updates", systemImage: "arrow.triangle.2.circlepath")
             }
-            .disabled(isCheckingUpdates)
+            .disabled(isCheckingUpdates || isUpdatingAll)
+
+            if updates.count > 1 {
+                Button {
+                    Task { await updateAll() }
+                } label: {
+                    Label("Update All (\(updates.count))", systemImage: "arrow.down.circle.fill")
+                }
+                .disabled(isUpdatingAll || isCheckingUpdates || appState.status.gameFound == nil)
+            }
 
             Button {
                 profilesSheetPresented = true
@@ -329,6 +353,60 @@ struct InstalledModsView: View {
         } catch {
             statusLine = "Couldn't update \(mod.fullName): \(error.localizedDescription)"
         }
+    }
+
+    /// Runs every currently-known update sequentially via `UpdateAllRunner`,
+    /// so one failing mod never blocks the rest of the batch. Marks every
+    /// targeted mod busy for the duration (rather than one at a time) since
+    /// `UpdateAllRunner` reports which mod is *starting*, not which ones
+    /// have already finished, and refreshes the manifest/active profile
+    /// once at the end rather than after each mod — same batching
+    /// `installFiles` already does for a multi-file drop. Ends with a
+    /// one-line summary (succeeded/failed counts, plus each failure's
+    /// message) in `statusLine`.
+    private func updateAll() async {
+        guard let gameDir = appState.status.gameFound, case .loaded(let packages) = indexState else { return }
+        let fullNames = Array(updates.keys)
+        guard !fullNames.isEmpty else { return }
+
+        isUpdatingAll = true
+        busyFullNames.formUnion(fullNames)
+        defer {
+            isUpdatingAll = false
+            updateAllProgressLine = nil
+            busyFullNames.subtract(fullNames)
+        }
+
+        let summary = await UpdateAllRunner.run(
+            fullNames: fullNames,
+            onProgress: { fullName in
+                Task { @MainActor in updateAllProgressLine = "Updating \(fullName)…" }
+            },
+            updater: { fullName in
+                try await appState.modManager.update(fullName: fullName, index: packages, gameDir: gameDir)
+            }
+        )
+
+        await appState.refreshManifest()
+        await appState.syncActiveProfileWithManifest()
+        for result in summary.results where result.outcome == .success {
+            updates.removeValue(forKey: result.fullName)
+        }
+
+        statusLine = updateAllSummaryLine(summary)
+    }
+
+    private func updateAllSummaryLine(_ summary: UpdateAllRunner.Summary) -> String {
+        var parts: [String] = []
+        if summary.succeededCount > 0 {
+            parts.append("Updated \(summary.succeededCount) mod\(summary.succeededCount == 1 ? "" : "s")")
+        }
+        let failures = summary.failures
+        if !failures.isEmpty {
+            let detail = failures.map { "\($0.fullName): \($0.message)" }.joined(separator: "; ")
+            parts.append("\(failures.count) failed (\(detail))")
+        }
+        return parts.isEmpty ? "Nothing to update" : parts.joined(separator: ", ")
     }
 
     /// Installs every dropped/picked `.zip`/`.dll` file in `urls`, in

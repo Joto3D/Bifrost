@@ -122,6 +122,14 @@ enum DebugCheck {
         print("")
         print("== Multiplayer safety ==")
         await checkMultiplayerSafety(realModManager: modManager)
+
+        print("")
+        print("== Game update watcher ==")
+        await checkGameUpdateWatcher(realGameDir: located?.directory)
+
+        print("")
+        print("== Update All ==")
+        await checkUpdateAllRunner()
     }
 
     // MARK: - Safety guard
@@ -1642,7 +1650,14 @@ enum DebugCheck {
 
         print("")
         print("5) live API (best effort, skips gracefully with no key configured):")
-        await checkNexusLiveAPI()
+        // The live test reads the real Keychain item; from sandboxed/headless
+        // shells macOS can't show the access prompt and the read hangs
+        // forever, so live API checking is opt-in.
+        if ProcessInfo.processInfo.environment["BIFROST_CHECK_LIVE_NEXUS"] == "1" {
+            await checkNexusLiveAPI()
+        } else {
+            print("  live API: SKIPPED (set BIFROST_CHECK_LIVE_NEXUS=1 to enable; avoids Keychain prompt hangs in headless runs)")
+        }
     }
 
     private static func checkNxmLinkParsing() {
@@ -2365,5 +2380,199 @@ enum DebugCheck {
         }
         let pass = profile.isServerGuest == nil && profile.isGuestProfile == false
         print("  old profiles.json (no isServerGuest key) decodes: isServerGuest=\(profile.isServerGuest.map(String.init) ?? "nil") isGuestProfile=\(profile.isGuestProfile) -> \(pass ? "PASS" : "FAIL")")
+    }
+
+    // MARK: - Game update watcher
+
+    /// Exercises `GameUpdateWatcher.check` against a throwaway TEMP fixture
+    /// (a fake `<root>/steamapps/common/FakeGame` game dir alongside a fake
+    /// `<root>/steamapps/appmanifest_892970.acf`, guarded by
+    /// `assertUnderTempDir`) and an injectable `UserDefaults` suite (never
+    /// `.standard` — this never touches the real app's persisted
+    /// last-seen buildid): first-seen (no warning, persists), unchanged
+    /// (same buildid, no warning), changed (warning fires, previous/current
+    /// both correct), and a same-run re-check proving the change was
+    /// actually persisted rather than just held in a local variable.
+    /// Finishes with a read-only line against the REAL `appmanifest_892970.acf`
+    /// (never calls `.check` against it, which would persist into the real
+    /// app's own `UserDefaults.standard` — see `readManifestInfo`, which is
+    /// read-only).
+    private static func checkGameUpdateWatcher(realGameDir: URL?) async {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent("BifrostCheck-gameupdate-\(UUID().uuidString)")
+        let gameDir = root.appendingPathComponent("steamapps/common/FakeGame")
+        let steamappsDir = root.appendingPathComponent("steamapps")
+        let manifestURL = steamappsDir.appendingPathComponent("appmanifest_\(GameLocator.valheimAppID).acf")
+        assertUnderTempDir(gameDir, label: "game update watcher gameDir")
+        assertUnderTempDir(manifestURL, label: "game update watcher manifestURL")
+        defer { try? fm.removeItem(at: root) }
+
+        func writeManifest(buildID: String) throws {
+            let text = """
+            "AppState"
+            {
+            \t"appid"\t\t"892970"
+            \t"buildid"\t\t"\(buildID)"
+            \t"SizeOnDisk"\t\t"12345678"
+            }
+            """
+            try fm.createDirectory(at: steamappsDir, withIntermediateDirectories: true)
+            try fm.createDirectory(at: gameDir, withIntermediateDirectories: true)
+            try text.write(to: manifestURL, atomically: true, encoding: .utf8)
+        }
+
+        let suiteName = "BifrostCheck-GameUpdateWatcher-\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suiteName) else {
+            print("  FAILED: could not create an injectable UserDefaults suite")
+            return
+        }
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        print("1) acf fixture (\(manifestURL.path)) — firstSeen / unchanged / updated, persisted to a throwaway UserDefaults suite:")
+        do {
+            try writeManifest(buildID: "100")
+        } catch {
+            print("  skipped: could not build fixture: \(error)")
+            return
+        }
+
+        let first = GameUpdateWatcher.check(gameDir: gameDir, defaults: defaults)
+        let firstOK: Bool
+        if case .firstSeen(let buildID) = first, buildID == "100" { firstOK = true } else { firstOK = false }
+        print("  first check (no prior record) -> \(first) -> \(firstOK ? "PASS" : "FAIL")")
+
+        let second = GameUpdateWatcher.check(gameDir: gameDir, defaults: defaults)
+        let secondOK: Bool
+        if case .unchanged(let buildID) = second, buildID == "100" { secondOK = true } else { secondOK = false }
+        print("  second check (same buildid, no warning) -> \(second) -> \(secondOK ? "PASS" : "FAIL")")
+
+        do {
+            try writeManifest(buildID: "200")
+        } catch {
+            print("  FAILED to update fixture: \(error)")
+            return
+        }
+        let third = GameUpdateWatcher.check(gameDir: gameDir, defaults: defaults)
+        let thirdOK: Bool
+        if case .updated(let previous, let current) = third, previous == "100", current == "200" { thirdOK = true } else { thirdOK = false }
+        print("  third check (buildid changed) -> \(third) -> \(thirdOK ? "PASS" : "FAIL") (message: \(third.message ?? "nil"))")
+
+        print("")
+        print("2) persistence round-trip — a later check against the SAME suite sees 200 as the baseline, not firstSeen again:")
+        let fourth = GameUpdateWatcher.check(gameDir: gameDir, defaults: defaults)
+        let fourthOK: Bool
+        if case .unchanged(let buildID) = fourth, buildID == "200" { fourthOK = true } else { fourthOK = false }
+        print("  fourth check -> \(fourth) -> \(fourthOK ? "PASS" : "FAIL")")
+
+        print("  -> \((firstOK && secondOK && thirdOK && fourthOK) ? "PASS" : "FAIL")")
+
+        print("")
+        print("3) (read-only) real appmanifest_\(GameLocator.valheimAppID).acf — current buildid (never persisted by this line):")
+        if let realGameDir, let info = GameUpdateWatcher.readManifestInfo(gameDir: realGameDir) {
+            print("  buildid=\(info.buildID) sizeOnDisk=\(info.sizeOnDisk ?? "nil")")
+        } else {
+            print("  skipped: no real game dir located, or its appmanifest_\(GameLocator.valheimAppID).acf could not be read")
+        }
+    }
+
+    // MARK: - Update All
+
+    /// Exercises `UpdateAllRunner` — the sequential "Update All" batch
+    /// runner `InstalledModsView` drives — at the logic level: (1) the
+    /// right N is computed by `ModManager.updatesAvailable` against a
+    /// fixture manifest (three installed mods, two outdated) and a fixture
+    /// index built entirely in-memory (no network), and (2) the runner
+    /// itself aggregates results correctly when one of three injected
+    /// updaters throws — the other two must still run (never aborts the
+    /// batch) and the failure must show up in the summary rather than
+    /// being swallowed.
+    private static func checkUpdateAllRunner() async {
+        print("1) correct N computed — fixture manifest (3 installed) vs fixture index (2 outdated):")
+        let fm = FileManager.default
+        let fakeManifestURL = fm.temporaryDirectory.appendingPathComponent("BifrostCheck-updateall-manifest-\(UUID().uuidString).json")
+        let fakeLaunchDir = fm.temporaryDirectory.appendingPathComponent("BifrostCheck-updateall-launch-\(UUID().uuidString)")
+        assertUnderTempDir(fakeManifestURL, label: "update-all fakeManifestURL")
+        assertUnderTempDir(fakeLaunchDir, label: "update-all fakeLaunchDir")
+        defer {
+            try? fm.removeItem(at: fakeManifestURL)
+            try? fm.removeItem(at: fakeLaunchDir)
+        }
+
+        let fixtureManifest = InstalledManifest(
+            loader: nil,
+            mods: [
+                .init(fullName: "Fixture-ModA", version: "1.0.0", enabled: true, files: []), // outdated: index has 1.1.0
+                .init(fullName: "Fixture-ModB", version: "1.0.0", enabled: true, files: []), // outdated: index has 1.2.0
+                .init(fullName: "Fixture-ModC", version: "2.0.0", enabled: true, files: []), // already latest
+            ]
+        )
+        do {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            try encoder.encode(fixtureManifest).write(to: fakeManifestURL)
+        } catch {
+            print("  skipped: could not build fixture manifest: \(error)")
+            return
+        }
+
+        let index = [
+            versionedFixturePackage(fullName: "Fixture-ModA", latestVersion: "1.1.0"),
+            versionedFixturePackage(fullName: "Fixture-ModB", latestVersion: "1.2.0"),
+            versionedFixturePackage(fullName: "Fixture-ModC", latestVersion: "2.0.0"),
+        ]
+        let modManager = ModManager(manifestURL: fakeManifestURL, launchDir: fakeLaunchDir)
+        let updates = await modManager.updatesAvailable(index: index)
+        let nOK = Set(updates.map(\.fullName)) == ["Fixture-ModA", "Fixture-ModB"]
+        print("  updatesAvailable -> \(updates.map(\.fullName).sorted()) (expect [Fixture-ModA, Fixture-ModB]) -> \(nOK ? "PASS" : "FAIL")")
+
+        print("")
+        print("2) sequential runner — one injected failure never aborts the batch, both others still run:")
+        let failingMod = "Fixture-ModB"
+        var updaterCalls: [String] = []
+        let summary = await UpdateAllRunner.run(fullNames: ["Fixture-ModA", "Fixture-ModB", "Fixture-ModC"]) { fullName in
+            updaterCalls.append(fullName)
+            if fullName == failingMod {
+                throw NSError(domain: "BifrostCheck", code: 1, userInfo: [NSLocalizedDescriptionKey: "simulated failure"])
+            }
+        }
+
+        let allAttempted = updaterCalls == ["Fixture-ModA", "Fixture-ModB", "Fixture-ModC"]
+        let countsOK = summary.succeededCount == 2 && summary.failedCount == 1
+        let failureRecorded = summary.results.first { $0.fullName == failingMod }?.outcome == .failure("simulated failure")
+        let pass = allAttempted && countsOK && failureRecorded
+        print("  updater invoked for: \(updaterCalls) (expect all three attempted, in order) -> \(allAttempted ? "PASS" : "FAIL")")
+        print("  succeeded=\(summary.succeededCount) failed=\(summary.failedCount) (expect 2/1) -> \(countsOK ? "PASS" : "FAIL")")
+        print("  failure recorded for \(failingMod): \(failureRecorded)")
+        print("  -> \(pass ? "PASS" : "FAIL")")
+    }
+
+    /// Builds a minimal `ThunderstorePackage` fixture with a specific latest
+    /// version number — everything `ModManager.updatesAvailable` doesn't
+    /// look at is filled with an inert placeholder. Distinct from
+    /// `fixturePackage(fullName:categories:...)` above (that one is for
+    /// `ModClassifier` fixtures and always pins version "1.0.0").
+    private static func versionedFixturePackage(fullName: String, latestVersion: String) -> ThunderstorePackage {
+        let version = ThunderstorePackage.Version(
+            name: fullName,
+            fullName: "\(fullName)-\(latestVersion)",
+            description: "",
+            icon: nil,
+            versionNumber: latestVersion,
+            dependencies: [],
+            downloadURL: URL(string: "https://example.invalid/\(fullName).zip")!,
+            downloads: 0,
+            fileSize: 0
+        )
+        return ThunderstorePackage(
+            name: fullName,
+            fullName: fullName,
+            owner: "FixtureAuthor",
+            packageURL: URL(string: "https://thunderstore.io/c/valheim/p/FixtureAuthor/\(fullName)/")!,
+            dateUpdated: Date(),
+            ratingScore: 0,
+            isDeprecated: false,
+            categories: [],
+            versions: [version]
+        )
     }
 }

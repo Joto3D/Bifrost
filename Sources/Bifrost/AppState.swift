@@ -11,6 +11,18 @@ final class AppState {
     private(set) var manifest: InstalledManifest = .empty
     private(set) var profiles: ProfilesFile = .empty
 
+    /// Result of the most recent Valheim build-change check (see
+    /// `GameUpdateWatcher`), for `GameUpdateBanner` to publish. Populated at
+    /// most once per app launch — see `hasCheckedGameUpdate` on `refresh()`.
+    private(set) var gameUpdateCheck: GameUpdateWatcher.CheckResult?
+    private var hasCheckedGameUpdate = false
+
+    /// Set by `GameUpdateBanner`'s "Check Mod Updates" action (via
+    /// `MainWindow`) to ask `InstalledModsView` to re-check for updates from
+    /// outside its own tab — same hand-off shape as `pendingFileDrop`.
+    /// `InstalledModsView` observes it and resets it to `false` once handled.
+    var requestModUpdateCheck = false
+
     /// Drives `SetupWizardView`'s sheet from anywhere in the view
     /// hierarchy (`MainWindow` presents it automatically on first launch
     /// when not `readyToPlay`; `SettingsView`'s "Run setup wizard" button
@@ -62,6 +74,16 @@ final class AppState {
 
         let located = GameLocator.locate()
         let gameFound = (located?.isValid == true) ? located?.directory : nil
+
+        // Runs at most once per launch: a second, near-simultaneous
+        // `refresh()` call (MainWindow's first-run task and StatusPanel's
+        // own `.task` both call this at app open) would otherwise see the
+        // buildid this call just persisted and report `.unchanged`,
+        // clobbering a real `.updated` result before anyone saw it.
+        if !hasCheckedGameUpdate {
+            hasCheckedGameUpdate = true
+            gameUpdateCheck = GameUpdateWatcher.check(gameDir: gameFound)
+        }
 
         let bepinexInstalled: Bool
         if let gameDir = located?.directory {

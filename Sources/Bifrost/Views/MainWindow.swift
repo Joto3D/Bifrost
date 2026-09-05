@@ -14,43 +14,63 @@ struct MainWindow: View {
     @State private var hasCheckedFirstRun = false
     @State private var selectedTab: Tab = .home
     @State private var isDropTargeted = false
+    /// Session-only dismiss state for `GameUpdateBanner` — reset on
+    /// relaunch, same as `priorProfileIDBeforeGuest` in `StatusPanel`.
+    @State private var gameUpdateBannerDismissed = false
+    /// Quiet, self-clearing note for the background Thunderstore index
+    /// refresh (see `IndexAutoRefresher`) — `nil` most of the time.
+    @State private var indexAutoRefreshNote: String?
 
     var body: some View {
         @Bindable var appState = appState
 
-        ZStack {
-            TabView(selection: $selectedTab) {
-                StatusPanel()
-                    .tabItem {
-                        Label("Home", systemImage: "house")
-                    }
-                    .tag(Tab.home)
+        VStack(spacing: 0) {
+            GameUpdateBanner(
+                isDismissed: $gameUpdateBannerDismissed,
+                onCheckModUpdates: {
+                    selectedTab = .installed
+                    appState.requestModUpdateCheck = true
+                }
+            )
 
-                ModBrowserView()
-                    .tabItem {
-                        Label("Browse", systemImage: "magnifyingglass")
-                    }
-                    .tag(Tab.browse)
+            ZStack {
+                TabView(selection: $selectedTab) {
+                    StatusPanel()
+                        .tabItem {
+                            Label("Home", systemImage: "house")
+                        }
+                        .tag(Tab.home)
 
-                InstalledModsView()
-                    .tabItem {
-                        Label("Installed", systemImage: "square.stack.3d.up")
-                    }
-                    .tag(Tab.installed)
+                    ModBrowserView()
+                        .tabItem {
+                            Label("Browse", systemImage: "magnifyingglass")
+                        }
+                        .tag(Tab.browse)
 
-                SettingsView()
-                    .tabItem {
-                        Label("Settings", systemImage: "gearshape")
-                    }
-                    .tag(Tab.settings)
-            }
+                    InstalledModsView()
+                        .tabItem {
+                            Label("Installed", systemImage: "square.stack.3d.up")
+                        }
+                        .tag(Tab.installed)
 
-            if isDropTargeted {
-                dropOverlay
-            }
+                    SettingsView()
+                        .tabItem {
+                            Label("Settings", systemImage: "gearshape")
+                        }
+                        .tag(Tab.settings)
+                }
 
-            if case .inProgress(let message) = appState.nexusInstallState {
-                nexusInstallBanner(message)
+                if isDropTargeted {
+                    dropOverlay
+                }
+
+                if case .inProgress(let message) = appState.nexusInstallState {
+                    nexusInstallBanner(message)
+                }
+
+                if let indexAutoRefreshNote {
+                    indexNoteBanner(indexAutoRefreshNote)
+                }
             }
         }
         .onDrop(of: [.fileURL], isTargeted: $isDropTargeted) { providers in
@@ -68,6 +88,16 @@ struct MainWindow: View {
             if !appState.status.readyToPlay {
                 appState.setupWizardPresented = true
             }
+        }
+        .task {
+            guard let refreshTask = IndexAutoRefresher.refreshIfStale(client: ThunderstoreClient(), onStatus: { note in
+                Task { @MainActor in
+                    withAnimation(Theme.settle) { indexAutoRefreshNote = note }
+                    try? await Task.sleep(nanoseconds: 5_000_000_000)
+                    withAnimation(Theme.settle) { indexAutoRefreshNote = nil }
+                }
+            }) else { return }
+            await refreshTask.value
         }
     }
 
@@ -119,6 +149,30 @@ struct MainWindow: View {
         .allowsHitTesting(false)
         .transition(.opacity)
         .animation(Theme.settle, value: appState.nexusInstallState)
+    }
+
+    /// A small, self-clearing status pill for the background Thunderstore
+    /// index refresh (see `IndexAutoRefresher`) — same non-blocking,
+    /// bottom-of-window treatment as `nexusInstallBanner`, since this is
+    /// likewise something that can happen at any time without the user
+    /// having asked for it.
+    private func indexNoteBanner(_ message: String) -> some View {
+        VStack {
+            Spacer()
+            HStack(spacing: 8) {
+                Image(systemName: "arrow.triangle.2.circlepath")
+                    .font(.caption)
+                Text(message)
+                    .font(.caption)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .background(.regularMaterial, in: Capsule())
+            .padding(.bottom, 24)
+        }
+        .allowsHitTesting(false)
+        .transition(.opacity)
+        .animation(Theme.settle, value: indexAutoRefreshNote)
     }
 
     /// Resolves every dropped item provider to a file `URL` off the main

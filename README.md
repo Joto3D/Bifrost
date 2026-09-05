@@ -164,3 +164,25 @@ installing or updating a mod — if a config keeps reverting, check whether
 you're reinstalling from Browse rather than using Installed's per-mod
 "Update" (which preserves the same protection, but it's worth checking
 the mod's `enabled` toggle state too).
+
+## Roadmap
+
+Ideas that don't fit yet, roughly in the order they'd matter:
+
+- **Multi-game support.** The launcher/mod-manager/profile machinery here
+  is almost entirely Valheim-specific only at the edges (the Steam app
+  ID, BepInEx pack name, and Thunderstore community slug) — generalizing
+  those into a per-game config would let Bifrost manage other
+  BepInEx-modded Steam games on Apple Silicon without a rewrite.
+- **Profile sharing.** Profiles (`Profile`/`ProfilesFile`) already capture
+  exactly what a modpack needs — mod membership and enabled state. Export/
+  import as a single file (or a shareable code) would let two people hand
+  each other a working modlist without either one clicking through
+  Thunderstore by hand, similar to r2modman's profile export.
+- **Windows-port parity for `nxm://`.** The Nexus "Mod Manager Download"
+  integration (see `NexusClient`/`AppState.handleNexusLink`) is
+  functionally equivalent to Vortex/r2modman's handling on Windows, but
+  the registration story differs (Info.plist's `CFBundleURLTypes` vs. a
+  Windows installer registering a protocol handler) — worth documenting
+  explicitly if Bifrost's approach ever gets ported, so a Windows build
+  doesn't have to rediscover the same `nxm://` link shape from scratch.

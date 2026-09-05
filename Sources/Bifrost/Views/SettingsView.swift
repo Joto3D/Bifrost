@@ -23,6 +23,7 @@ struct SettingsView: View {
     @State private var indexRefreshState: IndexRefreshState = .idle
     @AppStorage(Launcher.startSteamSilentlyDefaultsKey) private var startSteamSilently = true
     @AppStorage(Launcher.backupSavesBeforeModdedLaunchDefaultsKey) private var backupSavesBeforeModdedLaunch = true
+    @AppStorage(MenuBarPreference.showIconDefaultsKey) private var showMenuBarIcon = true
     @State private var saveBackup = SaveBackup()
     @State private var backups: [SaveBackup.Backup] = []
     @State private var isBackingUpNow = false
@@ -52,6 +53,11 @@ struct SettingsView: View {
 
                 Toggle("Back up saves before modded launch", isOn: $backupSavesBeforeModdedLaunch)
                 Text("If the newest automatic backup is more than 30 minutes old, Bifrost backs up worlds_local/characters_local before handing a modded launch off to Steam.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Toggle("Show menu bar icon", isOn: $showMenuBarIcon)
+                Text("Adds a Bifrost item to the menu bar for quick Play/profile actions without opening the main window.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
