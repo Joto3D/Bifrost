@@ -1,0 +1,59 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:Bifrost.ViewModels"
+        x:Class="Bifrost.Views.PackageDetailWindow"
+        x:DataType="vm:PackageDetailViewModel"
+        Title="{Binding Name}"
+        Width="560" Height="620" MinWidth="420" MinHeight="360"
+        WindowStartupLocation="CenterOwner">
+    <ScrollViewer>
+        <StackPanel Spacing="16" Margin="20">
+            <StackPanel Spacing="4">
+                <TextBlock Text="{Binding Name}" FontSize="20" FontWeight="SemiBold" />
+                <TextBlock Opacity="0.7">
+                    <Run Text="by " /><Run Text="{Binding Owner}" />
+                    <Run Text="   v" /><Run Text="{Binding LatestVersion}" />
+                </TextBlock>
+                <TextBlock Text="{Binding PackageUrl}" Opacity="0.6" FontSize="11" TextWrapping="Wrap" />
+            </StackPanel>
+
+            <TextBlock Text="{Binding Description}" TextWrapping="Wrap" IsVisible="{Binding HasDescription}" />
+
+            <StackPanel Spacing="8" IsVisible="{Binding HasConfig}">
+                <TextBlock Text="Config" FontWeight="SemiBold" />
+                <ItemsControl ItemsSource="{Binding Keybinds}">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <WrapPanel />
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate x:DataType="x:String">
+                            <Border Background="#22808080" CornerRadius="4" Padding="6,2" Margin="0,0,6,6">
+                                <TextBlock Text="{Binding}" FontSize="11" />
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+                <Button Content="Edit Config" Command="{Binding EditConfigCommand}" />
+            </StackPanel>
+
+            <StackPanel Spacing="8">
+                <TextBlock Text="README" FontWeight="SemiBold" />
+
+                <Button Content="Load README" Command="{Binding LoadReadmeCommand}" IsVisible="{Binding IsReadmeIdle}" />
+
+                <StackPanel Orientation="Horizontal" Spacing="8" IsVisible="{Binding IsReadmeLoading}">
+                    <TextBlock Text="Loading README..." Opacity="0.7" />
+                </StackPanel>
+
+                <TextBlock Text="{Binding ReadmeText}" TextWrapping="Wrap" IsVisible="{Binding IsReadmeLoaded}" />
+
+                <StackPanel Spacing="6" IsVisible="{Binding IsReadmeFailed}">
+                    <TextBlock Text="{Binding ReadmeError, StringFormat='Couldn\'t load README: {0}'}" Foreground="IndianRed" FontSize="11" />
+                    <Button Content="Retry" Command="{Binding LoadReadmeCommand}" />
+                </StackPanel>
+            </StackPanel>
+        </StackPanel>
+    </ScrollViewer>
+</Window>

@@ -1,0 +1,40 @@
+<Application xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             x:Class="Bifrost.App"
+             xmlns:local="using:Bifrost"
+             RequestedThemeVariant="Default">
+             <!-- "Default" ThemeVariant follows system theme variant. "Dark" or "Light" are other available options. -->
+
+    <Application.DataTemplates>
+        <local:ViewLocator />
+    </Application.DataTemplates>
+
+    <Application.Resources>
+        <!-- Design-time/pre-init fallbacks only — Bifrost.Theming.ThemeStore
+             overwrites every key below at startup (App.axaml.cs) and again
+             whenever the palette or the light/dark variant changes, using
+             the currently-selected ThemePalette (see Theming/ThemePalette.cs,
+             ported from the macOS app's Views/Theme.swift). -->
+        <ResourceDictionary>
+            <SolidColorBrush x:Key="BifrostAccentBrush" Color="#ED525E" />
+            <LinearGradientBrush x:Key="BifrostAccentGradientBrush" StartPoint="0%,50%" EndPoint="100%,50%">
+                <GradientStop Color="#ED525E" Offset="0" />
+                <GradientStop Color="#9E85DE" Offset="1" />
+            </LinearGradientBrush>
+            <LinearGradientBrush x:Key="BifrostAccentButtonFillBrush" StartPoint="0%,50%" EndPoint="100%,50%">
+                <GradientStop Color="#E6ED525E" Offset="0" />
+                <GradientStop Color="#E69E85DE" Offset="1" />
+            </LinearGradientBrush>
+            <SolidColorBrush x:Key="BifrostSecondaryAccentBrush" Color="#61ABEB" />
+            <SolidColorBrush x:Key="BifrostBadgeTintBrush" Color="#9E85DE" />
+            <SolidColorBrush x:Key="BifrostBadgeTintSoftBrush" Color="#9E85DE" Opacity="0.14" />
+            <SolidColorBrush x:Key="BifrostCardBackgroundBrush" Color="#201F23" />
+            <SolidColorBrush x:Key="BifrostCardBorderBrush" Color="#1FFFFFFF" />
+            <SolidColorBrush x:Key="BifrostSidebarBrush" Color="#12172B" />
+        </ResourceDictionary>
+    </Application.Resources>
+
+    <Application.Styles>
+        <FluentTheme />
+    </Application.Styles>
+</Application>

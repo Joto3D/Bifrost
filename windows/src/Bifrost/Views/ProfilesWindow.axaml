@@ -1,0 +1,39 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:Bifrost.ViewModels"
+        xmlns:models="using:Bifrost.Core.Models"
+        x:Class="Bifrost.Views.ProfilesWindow"
+        x:DataType="vm:ProfilesViewModel"
+        Title="Manage Profiles"
+        Width="440" Height="420"
+        WindowStartupLocation="CenterOwner">
+    <Grid Margin="16" RowDefinitions="*,Auto,Auto,Auto">
+
+        <ListBox Grid.Row="0" ItemsSource="{Binding Profiles}" SelectedItem="{Binding SelectedProfile}">
+            <ListBox.ItemTemplate>
+                <DataTemplate DataType="models:Profile">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <TextBlock Text="{Binding Name}" />
+                        <TextBlock Text="{Binding Mods.Count, StringFormat='({0} mods)'}" Opacity="0.6" />
+                    </StackPanel>
+                </DataTemplate>
+            </ListBox.ItemTemplate>
+        </ListBox>
+
+        <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="8" Margin="0,12,0,0">
+            <TextBox Text="{Binding NewProfileName}" PlaceholderText="New profile name" Width="200" />
+        </StackPanel>
+
+        <StackPanel Grid.Row="2" Orientation="Horizontal" Spacing="8" Margin="0,8,0,0">
+            <Button Content="Create empty" Command="{Binding CreateEmptyCommand}" />
+            <Button Content="Create from current" Command="{Binding CreateFromCurrentCommand}" />
+            <Button Content="Rename selected" Command="{Binding RenameCommand}" />
+        </StackPanel>
+
+        <StackPanel Grid.Row="3" Orientation="Horizontal" Spacing="8" Margin="0,8,0,0">
+            <Button Content="Duplicate selected" Command="{Binding DuplicateCommand}" />
+            <Button Content="Delete selected" Command="{Binding DeleteCommand}" />
+            <TextBlock Text="{Binding StatusMessage}" VerticalAlignment="Center" Foreground="IndianRed" />
+        </StackPanel>
+    </Grid>
+</Window>

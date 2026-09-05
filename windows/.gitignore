@@ -1,0 +1,17 @@
+## .NET build output
+bin/
+obj/
+
+## Rider / VS / VS Code
+.vs/
+.vscode/
+*.user
+*.suo
+.idea/
+
+## OS cruft
+.DS_Store
+Thumbs.db
+
+## Packaged distribution output
+dist/
