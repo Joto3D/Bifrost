@@ -157,21 +157,6 @@ struct ConfigEditorView: View {
         NavigationStack {
             content
                 .navigationTitle(title)
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button("Close") { requestClose() }
-                    }
-                    ToolbarItemGroup(placement: .primaryAction) {
-                        if isDirty {
-                            AuroraBadge(text: "Unsaved", systemImage: "circle.fill")
-                        }
-                        Button("Reveal in Finder") { revealInFinder() }
-                        Button("Revert") { load() }
-                            .disabled(!isDirty)
-                        Button("Save") { save() }
-                            .disabled(!isDirty || busy)
-                    }
-                }
                 .safeAreaInset(edge: .top) {
                     VStack(spacing: 0) {
                         if valheimRunning {
@@ -191,13 +176,19 @@ struct ConfigEditorView: View {
                     }
                 }
                 .safeAreaInset(edge: .bottom) {
-                    if let statusLine {
-                        Text(statusLine)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .padding(10)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                    VStack(spacing: 0) {
+                        if let statusLine {
+                            Text(statusLine)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .padding(.horizontal, 12)
+                                .padding(.top, 8)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        Divider()
+                        footerBar
                     }
+                    .background(.bar)
                 }
         }
         .frame(minWidth: 560, minHeight: 480)
@@ -217,6 +208,37 @@ struct ConfigEditorView: View {
         } message: {
             Text("You have unsaved edits to \(url.lastPathComponent).")
         }
+    }
+
+    /// Always-visible action row, laid out directly in the view hierarchy
+    /// rather than a `.toolbar` — a macOS sheet's toolbar can silently
+    /// collapse/overflow items it doesn't have room for (see git history:
+    /// Save and Revert lived in a `ToolbarItemGroup(placement: .primaryAction)`
+    /// alongside the "Unsaved" badge and Reveal-in-Finder, and stopped
+    /// rendering for users even though the code never changed after that),
+    /// so Save can never again silently disappear.
+    private var footerBar: some View {
+        HStack(spacing: Theme.Spacing.m) {
+            Button("Reveal in Finder") { revealInFinder() }
+            Button("Revert") { load() }
+                .disabled(!isDirty)
+
+            Spacer(minLength: Theme.Spacing.m)
+
+            if isDirty {
+                AuroraBadge(text: "Unsaved", systemImage: "circle.fill")
+            }
+
+            Button("Close") { requestClose() }
+                .keyboardShortcut(.cancelAction)
+
+            Button("Save") { save() }
+                .buttonStyle(.aurora)
+                .fixedSize()
+                .disabled(!isDirty || busy)
+                .keyboardShortcut("s", modifiers: .command)
+        }
+        .padding(Theme.Spacing.m)
     }
 
     @ViewBuilder
