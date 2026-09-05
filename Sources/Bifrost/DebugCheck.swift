@@ -134,6 +134,10 @@ enum DebugCheck {
         print("")
         print("== Fun ==")
         await checkFun(realModManager: modManager)
+
+        print("")
+        print("== profile share ==")
+        await checkProfileShare()
     }
 
     // MARK: - Safety guard
@@ -2816,5 +2820,229 @@ enum DebugCheck {
         let noneEligibleIndex = fixtureIndex.filter { !expectedNames.contains($0.fullName) }
         let pickReturnsNilWhenNoneEligible = SurpriseMe.pick(index: noneEligibleIndex, manifest: fixtureManifest) == nil
         print("  pick() returns nil when nothing is eligible: \(pickReturnsNilWhenNoneEligible) -> \(pickReturnsNilWhenNoneEligible ? "PASS" : "FAIL")")
+    }
+
+    // MARK: - Profile sharing
+
+    private static func fixtureSharePackage(fullName: String, version: String) -> ThunderstorePackage {
+        let v = ThunderstorePackage.Version(
+            name: fullName,
+            fullName: "\(fullName)-\(version)",
+            description: "fixture",
+            icon: nil,
+            versionNumber: version,
+            dependencies: [],
+            downloadURL: URL(string: "https://example.invalid/\(fullName).zip")!,
+            downloads: 0,
+            fileSize: 0
+        )
+        return ThunderstorePackage(
+            name: fullName,
+            fullName: fullName,
+            owner: "Fixture",
+            packageURL: URL(string: "https://example.invalid/\(fullName)")!,
+            dateUpdated: Date(),
+            ratingScore: 10,
+            isDeprecated: false,
+            categories: [],
+            versions: [v]
+        )
+    }
+
+    /// Exercises `ProfileShare` end to end against a throwaway TEMP fixture
+    /// manifest/profiles.json (guarded by `assertUnderTempDir`) and a small
+    /// hand-built Thunderstore index — `ProfileShare`'s resolution only
+    /// ever needs an `index: [ThunderstorePackage]` array, not a live
+    /// fetch, so every classification check here (resolvable /
+    /// already-installed / unresolvable / substitution / collision rename)
+    /// runs offline and deterministically. Only the final subsection
+    /// (r2modman round trip) touches the network, and skips gracefully if
+    /// it's unavailable.
+    private static func checkProfileShare() async {
+        let fm = FileManager.default
+        let fakeManifestURL = fm.temporaryDirectory.appendingPathComponent("BifrostCheck-share-manifest-\(UUID().uuidString).json")
+        let fakeLaunchDir = fm.temporaryDirectory.appendingPathComponent("BifrostCheck-share-launch-\(UUID().uuidString)")
+        let fakeGameDir = fm.temporaryDirectory.appendingPathComponent("BifrostCheck-share-game-\(UUID().uuidString)")
+        let fakeProfilesURL = fm.temporaryDirectory.appendingPathComponent("BifrostCheck-share-profiles-\(UUID().uuidString).json")
+        assertUnderTempDir(fakeManifestURL, label: "profile share fakeManifestURL")
+        assertUnderTempDir(fakeLaunchDir, label: "profile share fakeLaunchDir")
+        assertUnderTempDir(fakeGameDir, label: "profile share fakeGameDir")
+        assertUnderTempDir(fakeProfilesURL, label: "profile share fakeProfilesURL")
+        defer {
+            try? fm.removeItem(at: fakeManifestURL)
+            try? fm.removeItem(at: fakeLaunchDir)
+            try? fm.removeItem(at: fakeGameDir)
+            try? fm.removeItem(at: fakeProfilesURL)
+        }
+
+        let fixtureManifest = InstalledManifest(loader: nil, mods: [
+            .init(fullName: "Fixture-Alpha", version: "1.0.0", enabled: true, files: [], source: "thunderstore"),
+            .init(fullName: "Fixture-Beta", version: "2.0.0", enabled: false, files: [], source: "thunderstore"),
+            .init(fullName: "Fixture-LocalOnly", version: "0.0.0-local", enabled: true, files: [], source: "local"),
+            .init(fullName: "Fixture-NexusMod", version: "3.0.0", enabled: true, files: [], source: "nexus", nexusModId: 4242),
+        ])
+        do {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            try fm.createDirectory(at: fakeManifestURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try encoder.encode(fixtureManifest).write(to: fakeManifestURL)
+        } catch {
+            print("skipped: could not build fixture manifest: \(error)")
+            return
+        }
+
+        let fixtureModManager = ModManager(manifestURL: fakeManifestURL, launchDir: fakeLaunchDir)
+        let fixtureProfileStore = ProfileStore(profilesURL: fakeProfilesURL, modManager: fixtureModManager)
+
+        let sourceProfile = Profile(id: UUID(), name: "ShareMe", mods: [
+            .init(fullName: "Fixture-Alpha", enabled: true),
+            .init(fullName: "Fixture-Beta", enabled: false),
+            .init(fullName: "Fixture-LocalOnly", enabled: true),
+            .init(fullName: "Fixture-NexusMod", enabled: true),
+        ])
+        print("fixture profile \"ShareMe\": \(sourceProfile.mods.map(\.fullName))")
+
+        print("")
+        print("1) export — local-mod exclusion warning, nexus marker carried:")
+        let exportOutcome = ProfileShare.export(profile: sourceProfile, manifest: fixtureManifest)
+        let exportedNames = Set(exportOutcome.json.mods.map(\.fullName))
+        let localExcluded = !exportedNames.contains("Fixture-LocalOnly") && exportOutcome.skippedLocalMods == ["Fixture-LocalOnly"]
+        let nexusEntry = exportOutcome.json.mods.first { $0.fullName == "Fixture-NexusMod" }
+        let nexusMarkedOK = nexusEntry?.source == "nexus" && nexusEntry?.nexusModId == 4242
+        print("  exported mods: \(exportedNames.sorted())")
+        print("  skippedLocalMods=\(exportOutcome.skippedLocalMods) -> \(localExcluded ? "PASS" : "FAIL")")
+        print("  Fixture-NexusMod source=\(nexusEntry?.source ?? "nil") nexusModId=\(nexusEntry?.nexusModId.map(String.init) ?? "nil") -> \(nexusMarkedOK ? "PASS" : "FAIL")")
+
+        let exactIndex = [
+            fixtureSharePackage(fullName: "Fixture-Alpha", version: "1.0.0"),
+            fixtureSharePackage(fullName: "Fixture-Beta", version: "2.0.0"),
+        ]
+
+        print("")
+        print("2) native export -> base64 -> import plan (exact index, no substitution, nexus explained):")
+        var roundTripOK = false
+        do {
+            let plan = try ProfileShare.plan(nativeString: exportOutcome.encodedString, index: exactIndex, manifest: .empty)
+            let resolvedNames = Set(plan.resolvable.map(\.fullName))
+            let namesOK = resolvedNames == ["Fixture-Alpha", "Fixture-Beta"]
+            let noSubstitution = plan.resolvable.allSatisfy { !$0.wasSubstituted }
+            let enabledOK = plan.resolvable.first { $0.fullName == "Fixture-Alpha" }?.enabled == true
+                && plan.resolvable.first { $0.fullName == "Fixture-Beta" }?.enabled == false
+            let nameOK = plan.importedName == "ShareMe"
+            let nexusExplainedOK = plan.unresolvable.contains {
+                guard $0.fullName == "Fixture-NexusMod", case .nexusOnly(let modId) = $0.reason else { return false }
+                return modId == 4242
+            }
+            roundTripOK = namesOK && noSubstitution && enabledOK && nameOK && nexusExplainedOK
+            print("  plan.importedName=\(plan.importedName) (expect ShareMe)")
+            print("  resolvable=\(resolvedNames.sorted()) enabled(Alpha=true,Beta=false)=\(enabledOK) any-substituted=\(!noSubstitution)")
+            print("  Fixture-NexusMod explained as unresolvable(.nexusOnly(4242)): \(nexusExplainedOK)")
+            print("  -> \(roundTripOK ? "PASS" : "FAIL")")
+        } catch {
+            print("  FAILED: \(error)")
+        }
+
+        print("")
+        print("3) import against an index MISSING a mod -> unresolvable(.notInIndex):")
+        let missingOneIndex = [fixtureSharePackage(fullName: "Fixture-Alpha", version: "1.0.0")]
+        do {
+            let plan = try ProfileShare.plan(nativeString: exportOutcome.encodedString, index: missingOneIndex, manifest: .empty)
+            let betaUnresolved = plan.unresolvable.contains { $0.fullName == "Fixture-Beta" && $0.reason == .notInIndex }
+            let alphaStillResolvable = plan.resolvable.contains { $0.fullName == "Fixture-Alpha" }
+            print("  Fixture-Beta unresolvable(.notInIndex)=\(betaUnresolved), Fixture-Alpha still resolvable=\(alphaStillResolvable)")
+            print("  -> \((betaUnresolved && alphaStillResolvable) ? "PASS" : "FAIL")")
+        } catch {
+            print("  FAILED: \(error)")
+        }
+
+        print("")
+        print("4) import against an index with a NEWER version -> substitution noted:")
+        let newerIndex = [
+            fixtureSharePackage(fullName: "Fixture-Alpha", version: "1.5.0"),
+            fixtureSharePackage(fullName: "Fixture-Beta", version: "2.0.0"),
+        ]
+        do {
+            let plan = try ProfileShare.plan(nativeString: exportOutcome.encodedString, index: newerIndex, manifest: .empty)
+            let alpha = plan.resolvable.first { $0.fullName == "Fixture-Alpha" }
+            let substitutedOK = alpha?.requestedVersion == "1.0.0" && alpha?.resolvedVersion == "1.5.0" && alpha?.wasSubstituted == true
+            print("  Fixture-Alpha requested=1.0.0 resolved=\(alpha?.resolvedVersion ?? "nil") substituted=\(alpha?.wasSubstituted ?? false)")
+            print("  -> \(substitutedOK ? "PASS" : "FAIL")")
+        } catch {
+            print("  FAILED: \(error)")
+        }
+
+        print("")
+        print("5) apply — already-installed mods only (no network), creates profile, collision-renames:")
+        do {
+            await fixtureProfileStore.create(name: "ShareMe", fromCurrent: false) // pre-existing collision to rename around
+            let plan = try ProfileShare.plan(nativeString: exportOutcome.encodedString, index: exactIndex, manifest: fixtureManifest)
+            let classificationOK = plan.resolvable.isEmpty && plan.alreadyInstalled.count == 2
+            let created = try await ProfileShare.apply(plan, index: exactIndex, modManager: fixtureModManager, profileStore: fixtureProfileStore, gameDir: fakeGameDir)
+            let nameOK = created.name == "ShareMe (2)"
+            let modsOK = Set(created.mods) == Set([
+                Profile.ProfileMod(fullName: "Fixture-Alpha", enabled: true),
+                Profile.ProfileMod(fullName: "Fixture-Beta", enabled: false),
+            ])
+            let pass = classificationOK && nameOK && modsOK
+            print("  plan: resolvable=\(plan.resolvable.count) alreadyInstalled=\(plan.alreadyInstalled.count) (expect 0/2)")
+            print("  created profile name=\(created.name) (expect \"ShareMe (2)\"), mods match imported enabled states=\(modsOK)")
+            print("  -> \(pass ? "PASS" : "FAIL")")
+        } catch {
+            print("  FAILED: \(error)")
+        }
+
+        print("")
+        print("6) exportFile — pretty JSON at a .bifrostprofile path, round-trips via plan(nativeFileURL:):")
+        do {
+            let fileURL = fm.temporaryDirectory.appendingPathComponent("BifrostCheck-share-\(UUID().uuidString).bifrostprofile")
+            assertUnderTempDir(fileURL, label: "profile share exportFile fileURL")
+            defer { try? fm.removeItem(at: fileURL) }
+            let skipped = try ProfileShare.exportFile(profile: sourceProfile, manifest: fixtureManifest, to: fileURL)
+            let text = try String(contentsOf: fileURL, encoding: .utf8)
+            let isPretty = text.contains("\n")
+            let plan = try ProfileShare.plan(nativeFileURL: fileURL, index: exactIndex, manifest: .empty)
+            let roundTripFromFileOK = plan.importedName == "ShareMe" && Set(plan.resolvable.map(\.fullName)) == ["Fixture-Alpha", "Fixture-Beta"]
+            let pass = isPretty && roundTripFromFileOK && skipped == ["Fixture-LocalOnly"]
+            print("  wrote \(fileURL.lastPathComponent) (\(text.count) chars, pretty=\(isPretty)), skippedLocalMods=\(skipped)")
+            print("  plan(nativeFileURL:) round trip: importedName=\(plan.importedName) resolvable=\(Set(plan.resolvable.map(\.fullName)).sorted())")
+            print("  -> \(pass ? "PASS" : "FAIL")")
+        } catch {
+            print("  FAILED: \(error)")
+        }
+
+        print("")
+        print("7) r2modman interop — live round trip via thunderstore.io's legacyprofile API (skips gracefully offline):")
+        await checkR2ModManRoundTrip(sourceProfile: sourceProfile, manifest: fixtureManifest, index: exactIndex)
+    }
+
+    /// Uploads `sourceProfile` as a real r2modman profile code via
+    /// `ProfileShare.exportR2Code` (a live network round trip against
+    /// Thunderstore's `legacyprofile` API — no mocking, since the whole
+    /// point of this feature is interop with a service Bifrost doesn't
+    /// control), then imports that exact code back via `importR2Code` and
+    /// checks the result matches what was uploaded. Wrapped in a single
+    /// `catch` that prints a SKIPPED line rather than FAIL: this is the
+    /// only network-dependent part of `checkProfileShare`, and an offline
+    /// dev machine (or a future Thunderstore API change) shouldn't sink
+    /// the whole `--check` run over it.
+    private static func checkR2ModManRoundTrip(sourceProfile: Profile, manifest: InstalledManifest, index: [ThunderstorePackage]) async {
+        do {
+            let code = try await ProfileShare.exportR2Code(profile: sourceProfile, manifest: manifest)
+            print("  exportR2Code() -> \(code)")
+            guard ProfileShare.looksLikeR2ModManCode(code) else {
+                print("  -> FAIL: returned code doesn't look like a UUID")
+                return
+            }
+
+            let plan = try await ProfileShare.importR2Code(code, index: index, manifest: .empty)
+            let namesOK = Set(plan.resolvable.map(\.fullName)) == ["Fixture-Alpha", "Fixture-Beta"]
+            let enabledOK = plan.resolvable.first { $0.fullName == "Fixture-Alpha" }?.enabled == true
+                && plan.resolvable.first { $0.fullName == "Fixture-Beta" }?.enabled == false
+            let nameOK = plan.importedName == "ShareMe"
+            print("  importR2Code() -> name=\(plan.importedName) mods=\(plan.resolvable.map(\.fullName).sorted())")
+            print("  -> \((namesOK && enabledOK && nameOK) ? "PASS" : "FAIL")")
+        } catch {
+            print("  SKIPPED (network or Thunderstore API unavailable): \(error)")
+        }
     }
 }

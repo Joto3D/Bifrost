@@ -1,4 +1,6 @@
+import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Full profile management sheet, opened from the Installed tab's
 /// "Profiles…" toolbar button: list every profile (active one marked),
@@ -55,6 +57,7 @@ struct ProfilesSheetView: View {
     @State private var pendingDelete: Profile?
     @State private var namePromptKind: NamePromptKind?
     @State private var namePromptText = ""
+    @State private var importSheetPresented = false
 
     var body: some View {
         NavigationStack {
@@ -71,10 +74,15 @@ struct ProfilesSheetView: View {
                         .disabled(busy)
                     Button("New from Current") { presentNamePrompt(.createFromCurrent, defaultText: "New Profile") }
                         .disabled(busy)
+                    Button("Import…") { importSheetPresented = true }
+                        .disabled(busy)
                 }
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Done") { dismiss() }
                 }
+            }
+            .sheet(isPresented: $importSheetPresented) {
+                ImportProfileSheetView()
             }
             .safeAreaInset(edge: .bottom) {
                 if let statusLine {
@@ -158,6 +166,16 @@ struct ProfilesSheetView: View {
                 .disabled(busy)
             Button("Rename") { presentNamePrompt(.rename(profile), defaultText: profile.name) }
                 .disabled(busy)
+            Menu {
+                Button("Copy Share Code") { copyShareCode(profile) }
+                Button("Export to File…") { exportToFile(profile) }
+                Button("Copy r2modman Code") { Task { await copyR2Code(profile) } }
+            } label: {
+                Image(systemName: "square.and.arrow.up")
+            }
+            .disabled(busy)
+            .menuIndicator(.hidden)
+            .fixedSize()
             Button(role: .destructive) {
                 pendingDelete = profile
             } label: {
@@ -251,6 +269,57 @@ struct ProfilesSheetView: View {
             }
         } catch {
             statusLine = "Couldn't switch profile: \(error.localizedDescription)"
+        }
+    }
+
+    // MARK: - Sharing
+
+    /// Copies `profile`'s native share code (base64 JSON — see
+    /// `ProfileShare.export`) to the clipboard, warning in `statusLine`
+    /// about any `source == "local"` mods that got left out (they have no
+    /// identity a recipient could ever resolve).
+    private func copyShareCode(_ profile: Profile) {
+        let outcome = ProfileShare.export(profile: profile, manifest: appState.manifest)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(outcome.encodedString, forType: .string)
+        statusLine = outcome.skippedLocalMods.isEmpty
+            ? "Copied share code for \"\(profile.name)\" to the clipboard."
+            : "Copied share code for \"\(profile.name)\" (skipped local-only mods: \(outcome.skippedLocalMods.joined(separator: ", ")))."
+    }
+
+    /// Presents a save panel and writes `profile` to the chosen
+    /// `.bifrostprofile` file (see `ProfileShare.exportFile`).
+    private func exportToFile(_ profile: Profile) {
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "\(profile.name).bifrostprofile"
+        panel.allowedContentTypes = [UTType(filenameExtension: "bifrostprofile") ?? .json]
+        panel.canCreateDirectories = true
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            let skipped = try ProfileShare.exportFile(profile: profile, manifest: appState.manifest, to: url)
+            statusLine = skipped.isEmpty
+                ? "Exported \"\(profile.name)\" to \(url.lastPathComponent)."
+                : "Exported \"\(profile.name)\" to \(url.lastPathComponent) (skipped local-only mods: \(skipped.joined(separator: ", ")))."
+        } catch {
+            statusLine = "Couldn't export \"\(profile.name)\": \(error.localizedDescription)"
+        }
+    }
+
+    /// Uploads `profile` as an r2modman-compatible profile code (see
+    /// `ProfileShare.exportR2Code`) and copies the resulting code to the
+    /// clipboard — a live network round trip, so this sets `busy` like any
+    /// other in-flight action.
+    private func copyR2Code(_ profile: Profile) async {
+        statusLine = "Uploading r2modman code for \"\(profile.name)\"…"
+        busy = true
+        defer { busy = false }
+        do {
+            let code = try await ProfileShare.exportR2Code(profile: profile, manifest: appState.manifest)
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(code, forType: .string)
+            statusLine = "Copied r2modman code for \"\(profile.name)\" to the clipboard: \(code)"
+        } catch {
+            statusLine = "Couldn't create an r2modman code for \"\(profile.name)\": \(error.localizedDescription)"
         }
     }
 
