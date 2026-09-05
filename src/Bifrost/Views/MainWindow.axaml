@@ -1,0 +1,52 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:Bifrost.ViewModels"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d" d:DesignWidth="980" d:DesignHeight="640"
+        x:Class="Bifrost.Views.MainWindow"
+        x:DataType="vm:MainViewModel"
+        Icon="/Assets/avalonia-logo.ico"
+        Title="Bifrost"
+        Width="980" Height="640"
+        MinWidth="760" MinHeight="480">
+
+    <Design.DataContext>
+        <!-- This only sets the DataContext for the previewer in an IDE,
+             to set the actual DataContext for runtime, set the DataContext property in code (look at App.axaml.cs) -->
+        <vm:MainViewModel />
+    </Design.DataContext>
+
+    <Grid ColumnDefinitions="220,*">
+
+        <!-- Sidebar navigation: Home / Browse / Installed / Settings -->
+        <Border Grid.Column="0" Background="{DynamicResource BifrostSidebarBrush}">
+            <DockPanel Margin="0,16,0,0">
+                <TextBlock DockPanel.Dock="Top"
+                           Text="BIFROST"
+                           FontSize="16"
+                           FontWeight="Bold"
+                           Foreground="{DynamicResource BifrostAccentBrush}"
+                           Margin="20,0,0,20" />
+
+                <ListBox DockPanel.Dock="Top"
+                         ItemsSource="{Binding NavigationItems}"
+                         SelectedItem="{Binding SelectedItem}"
+                         Background="Transparent">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate DataType="vm:NavigationItem">
+                            <TextBlock Text="{Binding Title}"
+                                       FontSize="14"
+                                       Padding="4,6" />
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+            </DockPanel>
+        </Border>
+
+        <!-- Active page -->
+        <ContentControl Grid.Column="1" Content="{Binding CurrentPage}" />
+
+    </Grid>
+
+</Window>

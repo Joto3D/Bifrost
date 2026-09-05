@@ -1,0 +1,11 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="using:Bifrost.ViewModels"
+             x:Class="Bifrost.Views.InstalledView"
+             x:DataType="vm:InstalledViewModel">
+    <StackPanel Margin="32" Spacing="12">
+        <TextBlock Text="Installed" FontSize="24" FontWeight="SemiBold" />
+        <TextBlock Text="Enable/disable, update, and remove installed mods will live here."
+                   TextWrapping="Wrap" Opacity="0.7" />
+    </StackPanel>
+</UserControl>
