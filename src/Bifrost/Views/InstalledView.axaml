@@ -3,9 +3,41 @@
              xmlns:vm="using:Bifrost.ViewModels"
              x:Class="Bifrost.Views.InstalledView"
              x:DataType="vm:InstalledViewModel">
-    <StackPanel Margin="32" Spacing="12">
-        <TextBlock Text="Installed" FontSize="24" FontWeight="SemiBold" />
-        <TextBlock Text="Enable/disable, update, and remove installed mods will live here."
-                   TextWrapping="Wrap" Opacity="0.7" />
-    </StackPanel>
+    <Grid Margin="32" RowDefinitions="Auto,Auto,*,Auto">
+
+        <TextBlock Grid.Row="0" Text="Installed" FontSize="24" FontWeight="SemiBold" Margin="0,0,0,12" />
+
+        <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="12" Margin="0,0,0,12">
+            <TextBlock Text="{Binding LoaderVersion, StringFormat='BepInEx loader: {0}', FallbackValue='BepInEx loader: not installed'}" VerticalAlignment="Center" />
+            <Button Content="Refresh" Command="{Binding RefreshCommand}" />
+            <Button Content="Manage profiles..." Click="OnManageProfilesClick" />
+        </StackPanel>
+
+        <ListBox Grid.Row="2" ItemsSource="{Binding Mods}">
+            <ListBox.ItemTemplate>
+                <DataTemplate DataType="vm:InstalledModRowViewModel">
+                    <Grid ColumnDefinitions="Auto,*,Auto,Auto" Margin="0,4">
+                        <CheckBox Grid.Column="0" IsChecked="{Binding Enabled}" VerticalAlignment="Center" />
+                        <StackPanel Grid.Column="1" Spacing="2" Margin="8,0">
+                            <TextBlock FontWeight="SemiBold">
+                                <Run Text="{Binding FullName}" />
+                                <Run Text=" v" /><Run Text="{Binding InstalledVersion}" />
+                            </TextBlock>
+                            <TextBlock Text="{Binding LatestVersion, StringFormat='Update available: {0}'}"
+                                       IsVisible="{Binding UpdateAvailable}" Opacity="0.7" FontSize="11" />
+                        </StackPanel>
+                        <Button Grid.Column="2" Content="Update" Margin="4,0"
+                                IsVisible="{Binding UpdateAvailable}"
+                                Command="{Binding $parent[ListBox].((vm:InstalledViewModel)DataContext).UpdateCommand}"
+                                CommandParameter="{Binding}" />
+                        <Button Grid.Column="3" Content="Remove"
+                                Command="{Binding $parent[ListBox].((vm:InstalledViewModel)DataContext).RemoveCommand}"
+                                CommandParameter="{Binding}" />
+                    </Grid>
+                </DataTemplate>
+            </ListBox.ItemTemplate>
+        </ListBox>
+
+        <TextBlock Grid.Row="3" Text="{Binding StatusMessage}" TextWrapping="Wrap" Opacity="0.8" Margin="0,12,0,0" />
+    </Grid>
 </UserControl>

@@ -3,9 +3,56 @@
              xmlns:vm="using:Bifrost.ViewModels"
              x:Class="Bifrost.Views.BrowseView"
              x:DataType="vm:BrowseViewModel">
-    <StackPanel Margin="32" Spacing="12">
-        <TextBlock Text="Browse" FontSize="24" FontWeight="SemiBold" />
-        <TextBlock Text="Thunderstore mod search, browse, and install will live here."
-                   TextWrapping="Wrap" Opacity="0.7" />
-    </StackPanel>
+    <Grid Margin="32" RowDefinitions="Auto,Auto,*,Auto">
+
+        <TextBlock Grid.Row="0" Text="Browse" FontSize="24" FontWeight="SemiBold" Margin="0,0,0,12" />
+
+        <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="12" Margin="0,0,0,12">
+            <TextBox Text="{Binding SearchText}" PlaceholderText="Search name, owner, description..." Width="320" />
+            <ComboBox ItemsSource="{Binding SortOrders}" SelectedItem="{Binding SortOrder}" Width="140" />
+            <Button Content="Refresh" Command="{Binding LoadCommand}" />
+        </StackPanel>
+
+        <ListBox Grid.Row="2" ItemsSource="{Binding Packages}">
+            <ListBox.ItemTemplate>
+                <DataTemplate DataType="vm:PackageRowViewModel">
+                    <Grid ColumnDefinitions="*,Auto" Margin="0,4">
+                        <StackPanel Grid.Column="0" Spacing="2">
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <TextBlock FontWeight="SemiBold">
+                                    <Run Text="{Binding DisplayTitle}" />
+                                    <Run Text=" v" /><Run Text="{Binding LatestVersion}" />
+                                </TextBlock>
+                                <TextBlock Text="installed" Opacity="0.6" FontStyle="Italic" IsVisible="{Binding IsInstalled}" />
+                            </StackPanel>
+                            <TextBlock Text="{Binding Description}" Opacity="0.7" TextWrapping="Wrap" MaxLines="2" />
+                            <TextBlock Opacity="0.6" FontSize="11">
+                                <Run Text="rating " /><Run Text="{Binding RatingScore}" />
+                                <Run Text="  downloads " /><Run Text="{Binding TotalDownloads}" />
+                                <Run Text="  updated " /><Run Text="{Binding DateUpdated}" />
+                            </TextBlock>
+                        </StackPanel>
+                        <Button Grid.Column="1" Content="Install" VerticalAlignment="Center"
+                                Command="{Binding $parent[ListBox].((vm:BrowseViewModel)DataContext).InstallCommand}"
+                                CommandParameter="{Binding}" />
+                    </Grid>
+                </DataTemplate>
+            </ListBox.ItemTemplate>
+        </ListBox>
+
+        <Border Grid.Row="3" Background="{DynamicResource BifrostSidebarBrush}" CornerRadius="6" Padding="12" Margin="0,12,0,0">
+            <StackPanel Spacing="8">
+                <Border IsVisible="{Binding IsConfirmingInstall}" Padding="0,0,0,8">
+                    <StackPanel Spacing="8">
+                        <TextBlock Text="{Binding PendingInstallSummary}" TextWrapping="Wrap" />
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <Button Content="Confirm install" Command="{Binding ConfirmInstallCommand}" />
+                            <Button Content="Cancel" Command="{Binding CancelInstallCommand}" />
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+                <TextBlock Text="{Binding StatusMessage}" TextWrapping="Wrap" Opacity="0.8" />
+            </StackPanel>
+        </Border>
+    </Grid>
 </UserControl>

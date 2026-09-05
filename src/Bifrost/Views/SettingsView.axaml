@@ -3,9 +3,28 @@
              xmlns:vm="using:Bifrost.ViewModels"
              x:Class="Bifrost.Views.SettingsView"
              x:DataType="vm:SettingsViewModel">
-    <StackPanel Margin="32" Spacing="12">
+    <StackPanel Margin="32" Spacing="16" MaxWidth="640" HorizontalAlignment="Left">
         <TextBlock Text="Settings" FontSize="24" FontWeight="SemiBold" />
-        <TextBlock Text="Install paths, log shortcuts, and setup wizard re-run will live here."
-                   TextWrapping="Wrap" Opacity="0.7" />
+
+        <Border Background="{DynamicResource BifrostSidebarBrush}" CornerRadius="6" Padding="16">
+            <StackPanel Spacing="6">
+                <TextBlock Text="{Binding SteamRoot, StringFormat='Steam root: {0}'}" TextWrapping="Wrap" />
+                <TextBlock Text="{Binding GameDir, StringFormat='Game directory: {0}', FallbackValue='Game directory: not found'}" TextWrapping="Wrap" />
+                <TextBlock Text="{Binding AppDataDir, StringFormat='Bifrost app data: {0}'}" TextWrapping="Wrap" />
+            </StackPanel>
+        </Border>
+
+        <StackPanel Orientation="Horizontal" Spacing="12">
+            <Button Content="Refresh paths" Command="{Binding RefreshPathsCommand}" />
+            <Button Content="Refresh Thunderstore index" Command="{Binding RefreshIndexCommand}" />
+        </StackPanel>
+
+        <StackPanel Orientation="Horizontal" Spacing="12">
+            <Button Content="Open logs folder" Command="{Binding OpenLogsFolderCommand}" />
+            <Button Content="Open plugins folder" Command="{Binding OpenPluginsFolderCommand}" />
+            <Button Content="Open app data folder" Command="{Binding OpenAppDataFolderCommand}" />
+        </StackPanel>
+
+        <TextBlock Text="{Binding StatusMessage}" TextWrapping="Wrap" Opacity="0.8" />
     </StackPanel>
 </UserControl>

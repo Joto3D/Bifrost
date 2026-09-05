@@ -3,9 +3,33 @@
              xmlns:vm="using:Bifrost.ViewModels"
              x:Class="Bifrost.Views.HomeView"
              x:DataType="vm:HomeViewModel">
-    <StackPanel Margin="32" Spacing="12">
+    <StackPanel Margin="32" Spacing="16" MaxWidth="640" HorizontalAlignment="Left">
         <TextBlock Text="Home" FontSize="24" FontWeight="SemiBold" />
-        <TextBlock Text="Setup status, Play Modded / Play Vanilla, and last-launch log summary will live here."
-                   TextWrapping="Wrap" Opacity="0.7" />
+
+        <Border Background="{DynamicResource BifrostSidebarBrush}" CornerRadius="6" Padding="16">
+            <StackPanel Spacing="6">
+                <TextBlock Text="{Binding GameDir, StringFormat='Game: {0}', FallbackValue='Game: not found'}" TextWrapping="Wrap" />
+                <TextBlock Text="{Binding BepInExInstalled, StringFormat='BepInEx installed: {0}'}" />
+                <TextBlock Text="{Binding ModdedEnabled, StringFormat='Doorstop toggle: {0}', FallbackValue='Doorstop toggle: unknown'}" />
+                <TextBlock Text="{Binding SteamRunning, StringFormat='Steam running: {0}'}" />
+            </StackPanel>
+        </Border>
+
+        <StackPanel Orientation="Horizontal" Spacing="12">
+            <Button Content="Play Modded" Command="{Binding PlayModdedCommand}" />
+            <Button Content="Play Vanilla" Command="{Binding PlayVanillaCommand}" />
+            <Button Content="Refresh" Command="{Binding RefreshCommand}" />
+        </StackPanel>
+
+        <StackPanel Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
+            <TextBlock Text="Profile:" VerticalAlignment="Center" />
+            <ComboBox ItemsSource="{Binding Profiles}"
+                      SelectedItem="{Binding SelectedProfile}"
+                      DisplayMemberBinding="{Binding Name}"
+                      MinWidth="200" />
+            <Button Content="Apply" Command="{Binding ApplyProfileCommand}" />
+        </StackPanel>
+
+        <TextBlock Text="{Binding StatusMessage}" TextWrapping="Wrap" Opacity="0.8" />
     </StackPanel>
 </UserControl>

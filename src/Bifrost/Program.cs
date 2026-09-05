@@ -28,24 +28,10 @@ sealed class Program
     /// </summary>
     private static int RunSelfCheck()
     {
-        Console.WriteLine("Bifrost self-test (Windows scaffold)");
-        Console.WriteLine("=====================================");
+        Console.WriteLine("Bifrost --check");
+        Console.WriteLine("================");
 
-        var results = SelfTest.RunAll();
-        var allPassed = true;
-
-        foreach (var result in results)
-        {
-            allPassed &= result.Passed;
-            var status = result.Passed ? "PASS" : "FAIL";
-            Console.WriteLine($"[{status}] {result.Name} - {result.Detail}");
-        }
-
-        Console.WriteLine();
-        Console.WriteLine(allPassed
-            ? "All checks passed."
-            : "One or more checks failed.");
-
+        var allPassed = SelfTest.RunAllAsync(Console.Out).GetAwaiter().GetResult();
         return allPassed ? 0 : 1;
     }
 
