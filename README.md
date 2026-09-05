@@ -186,3 +186,10 @@ Ideas that don't fit yet, roughly in the order they'd matter:
   Windows installer registering a protocol handler) — worth documenting
   explicitly if Bifrost's approach ever gets ported, so a Windows build
   doesn't have to rediscover the same `nxm://` link shape from scratch.
+
+## Repository layout
+
+- **Root** — the macOS app (SwiftUI, Swift Package Manager; build with `swift build`, bundle with `./scripts/bundle.sh`)
+- **`windows/`** — the Windows port (Avalonia / .NET; `dotnet build`, package with `windows/scripts/package-win.sh`)
+
+Both apps share the same concepts (Thunderstore browser, dependency-resolving installs, profiles, config editor, Nexus `nxm://` support) with platform-appropriate launch mechanics: Rosetta-forced BepInEx injection through Steam launch options on macOS, and `winhttp.dll` auto-loading with a doorstop toggle on Windows.
