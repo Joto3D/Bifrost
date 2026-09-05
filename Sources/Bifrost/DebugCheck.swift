@@ -122,6 +122,10 @@ enum DebugCheck {
         print("")
         print("== Multiplayer safety ==")
         await checkMultiplayerSafety(realModManager: modManager)
+
+        print("")
+        print("== Fun ==")
+        await checkFun(realModManager: modManager)
     }
 
     // MARK: - Safety guard
@@ -2365,5 +2369,243 @@ enum DebugCheck {
         }
         let pass = profile.isServerGuest == nil && profile.isGuestProfile == false
         print("  old profiles.json (no isServerGuest key) decodes: isServerGuest=\(profile.isServerGuest.map(String.init) ?? "nil") isGuestProfile=\(profile.isGuestProfile) -> \(pass ? "PASS" : "FAIL")")
+    }
+
+    // MARK: - Fun
+
+    /// Exercises every "fun round" addition: `Flavor`'s launch quips and
+    /// `RunestoneTips`' tip line (both pure data — non-empty, no
+    /// duplicates), `SagaStats` against throwaway TEMP fixtures (a fake
+    /// localconfig.vdf snippet, a fake save dir, a fake manifest — all under
+    /// the system temp directory and guarded by `assertUnderTempDir`) plus a
+    /// read-only summary line built from the real machine's own data, and
+    /// `SurpriseMe`'s eligibility filter against index fixtures.
+    private static func checkFun(realModManager: ModManager) async {
+        checkFlavorAndTips()
+
+        print("")
+        await checkSagaStats(realModManager: realModManager)
+
+        print("")
+        checkSurpriseMe()
+    }
+
+    private static func checkFlavorAndTips() {
+        print("Flavor:")
+        let quipsNonEmpty = !Flavor.quips.isEmpty
+        let quipsUnique = Set(Flavor.quips).count == Flavor.quips.count
+        print("  \(Flavor.quips.count) quips, non-empty=\(quipsNonEmpty), all-unique=\(quipsUnique) -> \((quipsNonEmpty && quipsUnique) ? "PASS" : "FAIL")")
+
+        let seed = 42
+        let firstDraw = Flavor.quip(seed: seed)
+        let secondDraw = Flavor.quip(seed: seed)
+        let otherSeedDraw = Flavor.quip(seed: seed + 1)
+        let deterministic = firstDraw == secondDraw
+        let drawnFromList = Flavor.quips.contains(firstDraw) && Flavor.quips.contains(otherSeedDraw)
+        print("  quip(seed: \(seed)) is deterministic (\"\(firstDraw)\" == \"\(secondDraw)\") and drawn from the list: \(deterministic && drawnFromList) -> \((deterministic && drawnFromList) ? "PASS" : "FAIL")")
+        print("  (a different seed \(seed + 1) drew \"\(otherSeedDraw)\")")
+
+        print("RunestoneTips:")
+        let tipTexts = RunestoneTips.all.map(\.text)
+        let tipsNonEmpty = !RunestoneTips.all.isEmpty
+        let tipsUnique = Set(tipTexts).count == tipTexts.count
+        let usefulCount = RunestoneTips.all.filter { !$0.isLore }.count
+        let loreCount = RunestoneTips.all.filter { $0.isLore }.count
+        print("  \(RunestoneTips.all.count) tips (\(usefulCount) useful, \(loreCount) lore), non-empty=\(tipsNonEmpty), all-unique=\(tipsUnique) -> \((tipsNonEmpty && tipsUnique) ? "PASS" : "FAIL")")
+    }
+
+    /// Drives `SagaStats.snapshot` against a throwaway TEMP fixture — one
+    /// mod per `ModClass` (same fixture set as
+    /// `checkServerJoinPlanBuilding`), a fake save dir with one world's
+    /// `.fwl`/`.db` pair and one character's `.fch`, a real backup created
+    /// via `SaveBackup.backupNow` against that fixture save dir, and a
+    /// minimal `localconfig.vdf`-shaped snippet carrying a `Playtime` value
+    /// for Valheim's app block — then prints a read-only summary line built
+    /// the same way, but from this machine's *real* manifest, backups, save
+    /// dir, and localconfig.vdf (every read here is read-only — no mutation
+    /// of anything real).
+    private static func checkSagaStats(realModManager: ModManager) async {
+        let fm = FileManager.default
+        let fixtureSaveDir = fm.temporaryDirectory.appendingPathComponent("BifrostCheck-sagastats-savedir-\(UUID().uuidString)")
+        let fixtureBackupsDir = fm.temporaryDirectory.appendingPathComponent("BifrostCheck-sagastats-backupsdir-\(UUID().uuidString)")
+        assertUnderTempDir(fixtureSaveDir, label: "saga stats fixtureSaveDir")
+        assertUnderTempDir(fixtureBackupsDir, label: "saga stats fixtureBackupsDir")
+        defer {
+            try? fm.removeItem(at: fixtureSaveDir)
+            try? fm.removeItem(at: fixtureBackupsDir)
+        }
+
+        let worldDB = fixtureSaveDir.appendingPathComponent("worlds_local/World1.db")
+        let worldFWL = fixtureSaveDir.appendingPathComponent("worlds_local/World1.fwl")
+        let characterFCH = fixtureSaveDir.appendingPathComponent("characters_local/Hero1.fch")
+        do {
+            for url in [worldDB, worldFWL, characterFCH] {
+                try fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            }
+            try Data("world1-db-content".utf8).write(to: worldDB)
+            try Data("world1-fwl-content-longer".utf8).write(to: worldFWL)
+            try Data("hero1-fch-content".utf8).write(to: characterFCH)
+        } catch {
+            print("SagaStats: skipped, could not build fixture save dir: \(error)")
+            return
+        }
+
+        let fixtureManifest = InstalledManifest(
+            loader: nil,
+            mods: [
+                .init(fullName: "Azumatt-FirstPersonMode", version: "1.0.0", enabled: true, files: []), // clientOnly
+                .init(fullName: "ValheimModding-Jotunn", version: "1.0.0", enabled: true, files: []), // serverSynced
+                .init(fullName: "Soloredis-RtDBiomes", version: "1.0.0", enabled: true, files: []), // worldAltering
+                .init(fullName: "blacks7ar-GunzNBullets", version: "1.0.0", enabled: true, files: []), // addsItems
+                .init(fullName: "Fixture-TotallyUnknownMod", version: "1.0.0", enabled: true, files: []), // unknown
+            ]
+        )
+
+        let fixtureLocalConfig = """
+        "UserLocalConfigStore"
+        {
+        \t"Software"
+        \t{
+        \t\t"Valve"
+        \t\t{
+        \t\t\t"Steam"
+        \t\t\t{
+        \t\t\t\t"apps"
+        \t\t\t\t{
+        \t\t\t\t\t"892970"
+        \t\t\t\t\t{
+        \t\t\t\t\t\t"Playtime"\t\t"12345"
+        \t\t\t\t\t}
+        \t\t\t\t}
+        \t\t\t}
+        \t\t}
+        \t}
+        }
+        """
+
+        let saveBackup = SaveBackup(saveDir: fixtureSaveDir, backupsDir: fixtureBackupsDir)
+        let backupOutcome = try? await saveBackup.backupNow(reason: SaveBackup.manualReason)
+        let backups = await saveBackup.list()
+        let backupCreated: Bool
+        if case .created = backupOutcome {
+            backupCreated = backups.count == 1 && backups[0].byteSize > 0
+        } else {
+            backupCreated = false
+        }
+        print("SagaStats fixture: backup created in fixture backups dir: \(backupCreated) (outcome: \(String(describing: backupOutcome)))")
+
+        let snapshot = SagaStats.snapshot(
+            manifest: fixtureManifest,
+            index: [], // every fixture full name above resolves via ModClassifier's curatedOverrides, so an empty index is fine
+            backups: backups,
+            saveDir: fixtureSaveDir,
+            localConfigText: fixtureLocalConfig
+        )
+
+        let playtimeOK = snapshot.playtimeMinutes == 12345
+        print("  playtimeMinutes=\(snapshot.playtimeMinutes.map(String.init) ?? "nil") (expect 12345) -> \(playtimeOK ? "PASS" : "FAIL")")
+
+        let modCountOK = snapshot.modCount == 5
+        let expectedBreakdown: [ModClass] = [.clientOnly, .addsItems, .worldAltering, .serverSynced, .unknown]
+        let breakdownOK = snapshot.classBreakdown.map(\.modClass) == expectedBreakdown && snapshot.classBreakdown.allSatisfy { $0.count == 1 }
+        print("  modCount=\(snapshot.modCount) (expect 5), classBreakdown=\(snapshot.classBreakdown.map { "\($0.modClass.displayName):\($0.count)" }) -> \((modCountOK && breakdownOK) ? "PASS" : "FAIL")")
+
+        let worldsOK = snapshot.worlds.map(\.name) == ["World1"] && (snapshot.worlds.first?.byteSize ?? 0) > 0
+        let charactersOK = snapshot.characters.map(\.name) == ["Hero1"] && (snapshot.characters.first?.byteSize ?? 0) > 0
+        print("  worlds=\(snapshot.worlds.map { "\($0.name) (\($0.byteSize)b)" }) characters=\(snapshot.characters.map { "\($0.name) (\($0.byteSize)b)" }) -> \((worldsOK && charactersOK) ? "PASS" : "FAIL")")
+
+        let backupStatsOK = snapshot.backupCount == backups.count && snapshot.backupTotalBytes == backups.reduce(0) { $0 + $1.byteSize }
+        print("  backupCount=\(snapshot.backupCount) backupTotalBytes=\(snapshot.backupTotalBytes) -> \(backupStatsOK ? "PASS" : "FAIL")")
+
+        let flavorLines = SagaStats.flavorLines(for: snapshot)
+        let flavorLinesOK = !flavorLines.isEmpty && flavorLines.count <= 5
+        print("  flavorLines: \(flavorLinesOK ? "PASS" : "FAIL")")
+        for line in flavorLines {
+            print("    \(line)")
+        }
+
+        let overallPass = playtimeOK && modCountOK && breakdownOK && worldsOK && charactersOK && backupStatsOK && flavorLinesOK && backupCreated
+        print("  -> \(overallPass ? "PASS" : "FAIL")")
+
+        print("")
+        print("SagaStats real-dir summary (read-only — real manifest, real backups list, real save dir listing, real localconfig.vdf):")
+        let realManifest = await realModManager.loadManifest()
+        let realBackups = await SaveBackup().list()
+        let realLocalConfigText = SteamConfigurator.realLocalConfigURL().flatMap { try? String(contentsOf: $0, encoding: .utf8) }
+        let realSnapshot = SagaStats.snapshot(
+            manifest: realManifest,
+            index: [],
+            backups: realBackups,
+            saveDir: SaveBackup.defaultSaveDir,
+            localConfigText: realLocalConfigText
+        )
+        print("  playtimeMinutes=\(realSnapshot.playtimeMinutes.map(String.init) ?? "nil") modCount=\(realSnapshot.modCount) backups=\(realSnapshot.backupCount) worlds=\(realSnapshot.worlds.count) characters=\(realSnapshot.characters.count)")
+        for line in SagaStats.flavorLines(for: realSnapshot) {
+            print("  \(line)")
+        }
+    }
+
+    /// Drives `SurpriseMe.eligible`/`pick` against a small fixture index
+    /// covering every exclusion rule: below the rating threshold, deprecated,
+    /// the BepInEx loader pack itself, and already installed — plus one
+    /// package sitting exactly at the rating threshold (`>=`, not `>`) and
+    /// one comfortably above it.
+    private static func checkSurpriseMe() {
+        func fixturePackage(fullName: String, rating: Int, deprecated: Bool = false) -> ThunderstorePackage {
+            let version = ThunderstorePackage.Version(
+                name: fullName,
+                fullName: "\(fullName)-1.0.0",
+                description: "A fixture package.",
+                icon: nil,
+                versionNumber: "1.0.0",
+                dependencies: [],
+                downloadURL: URL(string: "https://example.invalid/\(fullName).zip")!,
+                downloads: 0,
+                fileSize: 0
+            )
+            return ThunderstorePackage(
+                name: fullName,
+                fullName: fullName,
+                owner: "Fixture",
+                packageURL: URL(string: "https://example.invalid/\(fullName)")!,
+                dateUpdated: Date(),
+                ratingScore: rating,
+                isDeprecated: deprecated,
+                categories: [],
+                versions: [version]
+            )
+        }
+
+        let goodMod = fixturePackage(fullName: "GoodAuthor-GoodMod", rating: 50)
+        let boundaryMod = fixturePackage(fullName: "Boundary-Mod", rating: SurpriseMe.minimumRating)
+        let lowRatedMod = fixturePackage(fullName: "LowRated-Mod", rating: SurpriseMe.minimumRating - 1)
+        let deprecatedMod = fixturePackage(fullName: "Deprecated-Mod", rating: 100, deprecated: true)
+        let loaderPackage = fixturePackage(fullName: ModManager.loaderFullName, rating: 999)
+        let installedMod = fixturePackage(fullName: "AlreadyInstalled-Mod", rating: 80)
+
+        let fixtureIndex = [goodMod, boundaryMod, lowRatedMod, deprecatedMod, loaderPackage, installedMod]
+        let fixtureManifest = InstalledManifest(loader: nil, mods: [
+            .init(fullName: "AlreadyInstalled-Mod", version: "1.0.0", enabled: true, files: []),
+        ])
+
+        let eligible = SurpriseMe.eligible(index: fixtureIndex, manifest: fixtureManifest)
+        let eligibleNames = Set(eligible.map(\.fullName))
+        let expectedNames: Set<String> = ["GoodAuthor-GoodMod", "Boundary-Mod"]
+        let eligibleOK = eligibleNames == expectedNames
+        print("SurpriseMe.eligible: \(eligibleNames.sorted()) (expect \(expectedNames.sorted())) -> \(eligibleOK ? "PASS" : "FAIL")")
+        print("  excludes: below-threshold, deprecated, the BepInEx loader, and already-installed mods")
+
+        var everyPickWasEligible = true
+        for _ in 0..<25 {
+            guard let picked = SurpriseMe.pick(index: fixtureIndex, manifest: fixtureManifest) else { continue }
+            if !expectedNames.contains(picked.fullName) {
+                everyPickWasEligible = false
+            }
+        }
+        print("  pick() only ever returns an eligible package across 25 draws: \(everyPickWasEligible) -> \(everyPickWasEligible ? "PASS" : "FAIL")")
+
+        let noneEligibleIndex = fixtureIndex.filter { !expectedNames.contains($0.fullName) }
+        let pickReturnsNilWhenNoneEligible = SurpriseMe.pick(index: noneEligibleIndex, manifest: fixtureManifest) == nil
+        print("  pick() returns nil when nothing is eligible: \(pickReturnsNilWhenNoneEligible) -> \(pickReturnsNilWhenNoneEligible ? "PASS" : "FAIL")")
     }
 }
