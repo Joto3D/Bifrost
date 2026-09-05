@@ -22,6 +22,12 @@ struct SettingsView: View {
     @Environment(ThemeStore.self) private var themeStore
     @State private var indexRefreshState: IndexRefreshState = .idle
     @AppStorage(Launcher.startSteamSilentlyDefaultsKey) private var startSteamSilently = true
+    @AppStorage(Launcher.backupSavesBeforeModdedLaunchDefaultsKey) private var backupSavesBeforeModdedLaunch = true
+    @State private var saveBackup = SaveBackup()
+    @State private var backups: [SaveBackup.Backup] = []
+    @State private var isBackingUpNow = false
+    @State private var backupStatusLine: String?
+    @State private var pendingRestore: SaveBackup.Backup?
 
     // MARK: - Nexus Mods section state
     @State private var nexusAPIKeyInput = ""
@@ -43,6 +49,11 @@ struct SettingsView: View {
                 Text("When Bifrost needs to start Steam, it starts minimized without opening the Steam window. Steam may still show windows for logins or client updates.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+
+                Toggle("Back up saves before modded launch", isOn: $backupSavesBeforeModdedLaunch)
+                Text("If the newest automatic backup is more than 30 minutes old, Bifrost backs up worlds_local/characters_local before handing a modded launch off to Steam.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
 
             Section("Appearance") {
@@ -55,6 +66,41 @@ struct SettingsView: View {
                             themeStore.current = palette
                         }
                     }
+                }
+            }
+
+            Section("Backups") {
+                HStack(spacing: 10) {
+                    Button {
+                        Task { await backUpNow() }
+                    } label: {
+                        Label("Back Up Now", systemImage: "externaldrive.badge.plus")
+                    }
+                    .disabled(isBackingUpNow)
+
+                    if isBackingUpNow {
+                        ProgressView()
+                            .controlSize(.small)
+                    }
+
+                    if let backupStatusLine {
+                        Text(backupStatusLine)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                if backups.isEmpty {
+                    Text("No backups yet.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(backups) { backup in
+                        backupRow(backup)
+                    }
+                    Text("Total size: \(Self.formattedSize(backups.reduce(0) { $0 + $1.byteSize }))")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
 
@@ -168,6 +214,88 @@ struct SettingsView: View {
         }
         .formStyle(.grouped)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .task {
+            await reloadBackups()
+        }
+        .confirmationDialog(
+            "Restore this backup?",
+            isPresented: Binding(
+                get: { pendingRestore != nil },
+                set: { if !$0 { pendingRestore = nil } }
+            ),
+            presenting: pendingRestore
+        ) { backup in
+            Button("Restore", role: .destructive) {
+                Task { await restore(backup) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { backup in
+            Text("Make sure Valheim is closed first. Your current saves will be backed up automatically, then replaced with this backup from \(Self.dateFormatter.string(from: backup.date)).")
+        }
+    }
+
+    // MARK: - Backups
+
+    @ViewBuilder
+    private func backupRow(_ backup: SaveBackup.Backup) -> some View {
+        HStack(alignment: .top) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(Self.dateFormatter.string(from: backup.date))
+                    .font(.subheadline.weight(.medium))
+                Text("\(backup.reason) · \(Self.formattedSize(backup.byteSize))")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button("Reveal in Finder") {
+                NSWorkspace.shared.activateFileViewerSelecting([backup.url])
+            }
+            Button("Restore") {
+                pendingRestore = backup
+            }
+        }
+        .padding(.vertical, 2)
+    }
+
+    private func reloadBackups() async {
+        backups = await saveBackup.list()
+    }
+
+    private func backUpNow() async {
+        isBackingUpNow = true
+        defer { isBackingUpNow = false }
+        do {
+            switch try await saveBackup.backupNow(reason: SaveBackup.manualReason) {
+            case .created(let summary):
+                backupStatusLine = "Backed up \(summary.fileCount) file\(summary.fileCount == 1 ? "" : "s") (\(Self.formattedSize(summary.byteSize)))"
+            case .skipped(let reason):
+                backupStatusLine = reason
+            }
+        } catch {
+            backupStatusLine = "Backup failed: \(error.localizedDescription)"
+        }
+        await reloadBackups()
+    }
+
+    private func restore(_ backup: SaveBackup.Backup) async {
+        do {
+            _ = try await saveBackup.restore(backup: backup, into: SaveBackup.defaultSaveDir)
+            backupStatusLine = "Restored the backup from \(Self.dateFormatter.string(from: backup.date))"
+        } catch {
+            backupStatusLine = "Restore failed: \(error.localizedDescription)"
+        }
+        await reloadBackups()
+    }
+
+    private static let dateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter
+    }()
+
+    private static func formattedSize(_ bytes: Int64) -> String {
+        ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
     }
 
     // MARK: - Nexus Mods

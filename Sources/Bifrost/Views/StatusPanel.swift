@@ -29,6 +29,7 @@ struct StatusPanel: View {
     @State private var profileStatusLine: String?
     @State private var pendingProfileSwitch: PendingProfileSwitch?
     @State private var pendingMissingMods: PendingMissingMods?
+    @State private var lastBackupDate: Date?
 
     var body: some View {
         VStack(spacing: Theme.Spacing.xl) {
@@ -57,6 +58,9 @@ struct StatusPanel: View {
         .animation(Theme.settle, value: appState.status)
         .task {
             await appState.refresh()
+        }
+        .task {
+            lastBackupDate = await SaveBackup().list().first?.date
         }
         .confirmationDialog(
             "Switch profile?",
@@ -246,6 +250,10 @@ struct StatusPanel: View {
             .buttonStyle(.quiet)
             .disabled(appState.status.gameFound == nil || isLaunching)
 
+            Text(lastBackupCaption)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+
             if let launchStatusLine {
                 HStack(spacing: 8) {
                     if isLaunching {
@@ -266,6 +274,13 @@ struct StatusPanel: View {
                 .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
+    }
+
+    private var lastBackupCaption: String {
+        guard let lastBackupDate else { return "Saves last backed up: never" }
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .full
+        return "Saves last backed up: \(formatter.localizedString(for: lastBackupDate, relativeTo: Date()))"
     }
 
     // MARK: - Footer menu
@@ -415,6 +430,8 @@ struct StatusPanel: View {
 
     private static func describe(_ phase: Launcher.LaunchPhase) -> String {
         switch phase {
+        case .backingUpSaves:
+            return "Backing up saves…"
         case .startingSteam(let silent):
             return silent ? "Starting Steam in the background…" : "Starting Steam…"
         case .waitingForSteam:

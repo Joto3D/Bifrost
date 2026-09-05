@@ -22,6 +22,11 @@ enum Launcher {
     /// several times as the launch progresses; the phase returned by
     /// `play` itself is always the last one reported.
     enum LaunchPhase: Sendable, Equatable {
+        /// A modded launch's newest automatic save backup is stale (or
+        /// there isn't one yet) and the "back up before modded launch"
+        /// preference is on; `SaveBackup.backupNow(reason: "pre-launch")`
+        /// is running before Steam is even touched.
+        case backingUpSaves
         /// Steam wasn't running; `open -a Steam` (or its silent variant,
         /// see `silent`) was just issued.
         case startingSteam(silent: Bool)
@@ -67,12 +72,17 @@ enum Launcher {
         let steamStepDescription = startSteamSilentlyPreference()
             ? "Ensure Steam is running (open -a Steam --args -silent if needed, so its window stays hidden) and wait for it to finish starting up"
             : "Ensure Steam is running (open -a Steam if needed) and wait for it to finish starting up"
-        return [
+        var steps: [PlanStep] = []
+        if modded {
+            steps.append(PlanStep(description: "If \"Back up saves before modded launch\" is on and the newest automatic backup is more than 30 minutes old (or there isn't one), back up worlds_local/characters_local first (SaveBackup.backupNow(reason: \"pre-launch\"))"))
+        }
+        steps.append(contentsOf: [
             PlanStep(description: steamStepDescription),
             PlanStep(description: "Write \"\(modded ? "modded" : "vanilla")\" to \(modeFileURL.path)"),
             PlanStep(description: "Open \(launchURL.absoluteString) via NSWorkspace"),
             PlanStep(description: "Watch \(SteamLogWatcher.defaultLogURL.path) for GameAction progress on AppID \(GameLocator.valheimAppID) — retry the URL once if nothing appears, and flag any Steam dialog that needs a response"),
-        ]
+        ])
+        return steps
     }
 
     /// Runs the full staged launch: ensures Steam is running and ready
@@ -87,6 +97,10 @@ enum Launcher {
     /// those are expected shapes a launch can take rather than exceptional
     /// failures.
     static func play(modded: Bool, onPhase: @Sendable (LaunchPhase) -> Void = { _ in }) async throws -> LaunchPhase {
+        if modded {
+            await backUpSavesBeforeModdedLaunchIfNeeded(onPhase: onPhase)
+        }
+
         guard await ensureSteamRunning(onPhase: onPhase) else {
             onPhase(.steamFailedToStart)
             return .steamFailedToStart
@@ -239,6 +253,38 @@ enum Launcher {
         default:
             return "Steam is showing a dialog (\(task)) that needs your answer before Valheim can launch."
         }
+    }
+
+    // MARK: - Save backups
+
+    /// UserDefaults key backing "Back up saves before modded launch" in
+    /// Settings' Launch section (see `SettingsView`). Defaults to on.
+    static let backupSavesBeforeModdedLaunchDefaultsKey = "backupSavesBeforeModdedLaunch"
+
+    private static func backupSavesBeforeModdedLaunchPreference() -> Bool {
+        let defaults = UserDefaults.standard
+        guard defaults.object(forKey: backupSavesBeforeModdedLaunchDefaultsKey) != nil else { return true }
+        return defaults.bool(forKey: backupSavesBeforeModdedLaunchDefaultsKey)
+    }
+
+    /// Cheap insurance against a bad mod corrupting a save with no safety
+    /// net: before a modded launch, takes a fresh "pre-launch" backup if
+    /// the newest *automatic* backup (manual ones don't count toward this)
+    /// is more than 30 minutes old, or there isn't one yet. A no-op if the
+    /// preference is off. Never throws — a launch should never be blocked
+    /// by a failed backup, so any error here is swallowed.
+    private static func backUpSavesBeforeModdedLaunchIfNeeded(onPhase: @Sendable (LaunchPhase) -> Void) async {
+        guard backupSavesBeforeModdedLaunchPreference() else { return }
+
+        let staleness: TimeInterval = 30 * 60
+        let backup = SaveBackup()
+        let newestAutomatic = await backup.list().first { $0.reason != SaveBackup.manualReason }
+        if let newestAutomatic, Date().timeIntervalSince(newestAutomatic.date) < staleness {
+            return
+        }
+
+        onPhase(.backingUpSaves)
+        _ = try? await backup.backupNow(reason: "pre-launch")
     }
 
     // MARK: - Shared helpers
