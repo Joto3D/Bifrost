@@ -96,6 +96,10 @@ enum DebugCheck {
         await checkModManager(realGameDir: located?.directory, realModManager: modManager)
 
         print("")
+        print("== install from file ==")
+        await checkInstallFromFile()
+
+        print("")
         print("== Wizard simulation (fresh-machine) ==")
         await checkWizardSimulation()
 
@@ -599,6 +603,260 @@ enum DebugCheck {
         for mod in finalManifest.mods.sorted(by: { $0.fullName < $1.fullName }) {
             print("  \(mod.fullName) v\(mod.version) enabled=\(mod.enabled) files=\(mod.files.count)")
         }
+    }
+
+    // MARK: - Install from file
+
+    /// Exercises `ModManager.installFromFile` end to end against throwaway
+    /// TEMP fixtures (fake game dir + temp manifest + temp launch dir, all
+    /// under the system temp directory and guarded by `assertUnderTempDir`)
+    /// — every test archive is built from scratch with `/usr/bin/zip`
+    /// (`makeZipFixture`) rather than touching any real download, so this
+    /// needs no network access and mutates nothing outside temp:
+    ///  (a) a flat zip containing just a bare `.dll` at its root,
+    ///  (b) a zip carrying a `plugins/<name>/` subdirectory alongside an
+    ///      unrelated root file (so the wrapper-folder collapse in
+    ///      `resolvePayloadRoot` doesn't mask which heuristic actually
+    ///      fired) — the Willybach HD Valheim shape: a `.dll` plus a large
+    ///      sibling data folder under `plugins/`,
+    ///  (c) a Thunderstore-style zip (`manifest.json` + `icon.png` +
+    ///      `README.md` alongside a flat `.dll`) — proves manifest.json's
+    ///      name/version/author get parsed into the derived identity and
+    ///      its metadata files get filtered out of the payload,
+    ///  (d) a bare `.dll` file with no zip at all,
+    ///  (e) a name collision — reinstalling over an already-installed
+    ///      local mod without `replaceExisting` must throw, and with it
+    ///      must uninstall the old files before installing the new ones,
+    ///  (f) uninstalling a locally-installed mod removes exactly its
+    ///      recorded files and leaves every other local mod untouched,
+    ///  (g) an old-style manifest.json on disk with no "source" key at
+    ///      all decodes with every mod defaulting to `source ==
+    ///      "thunderstore"` (backward compat for a manifest written
+    ///      before this field existed).
+    private static func checkInstallFromFile() async {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent("BifrostCheck-installfromfile-\(UUID().uuidString)")
+        let fakeGameDir = root.appendingPathComponent("game")
+        let fakeManifestURL = root.appendingPathComponent("manifest.json")
+        let fakeLaunchDir = root.appendingPathComponent("launch")
+        let stagingDir = root.appendingPathComponent("staging")
+        assertUnderTempDir(fakeGameDir, label: "install-from-file fakeGameDir")
+        assertUnderTempDir(fakeManifestURL, label: "install-from-file fakeManifestURL")
+        assertUnderTempDir(fakeLaunchDir, label: "install-from-file fakeLaunchDir")
+        assertUnderTempDir(stagingDir, label: "install-from-file stagingDir")
+        defer { try? fm.removeItem(at: root) }
+
+        do {
+            try fm.createDirectory(at: fakeGameDir, withIntermediateDirectories: true)
+            try fm.createDirectory(at: stagingDir, withIntermediateDirectories: true)
+        } catch {
+            print("skipped: could not create fixture directories: \(error)")
+            return
+        }
+
+        let modManager = ModManager(manifestURL: fakeManifestURL, launchDir: fakeLaunchDir)
+        print("fixture: fake game dir \(fakeGameDir.path)")
+        print("fixture: fake manifest \(fakeManifestURL.path)")
+
+        print("")
+        print("(a) flat zip containing a single bare .dll at its root:")
+        do {
+            let zipURL = try await makeZipFixture(stagingRoot: stagingDir, name: "flat-dll", entries: [
+                "FlatMod.dll": Data("flat dll contents".utf8),
+            ])
+            let fullName = try await modManager.installFromFile(url: zipURL, gameDir: fakeGameDir) { print("  progress: \($0)") }
+            let expectedFullName = "Local-flat-dll"
+            let dllPresent = fm.fileExists(atPath: fakeGameDir.appendingPathComponent("BepInEx/plugins/\(expectedFullName)/FlatMod.dll").path)
+            let mod = await modManager.installedMod(fullName: expectedFullName)
+            let manifestOK = mod?.version == "0.0.0-local" && mod?.source == "local" && mod?.enabled == true
+            let pass = fullName == expectedFullName && dllPresent && manifestOK
+            print("  fullName=\(fullName) (expect \(expectedFullName)) dll-present=\(dllPresent) version=\(mod?.version ?? "nil") source=\(mod?.source ?? "nil")")
+            print("  -> \(pass ? "PASS" : "FAIL")")
+        } catch {
+            print("  FAILED: \(error)")
+        }
+
+        print("")
+        print("(b) zip with a plugins/<name>/ subdirectory (dll + sibling data folder):")
+        do {
+            let zipURL = try await makeZipFixture(stagingRoot: stagingDir, name: "plugins-dir", entries: [
+                "plugins/CoolPlugin/CoolPlugin.dll": Data("plugin dll".utf8),
+                "plugins/CoolPlugin/data/asset.bin": Data("big asset data".utf8),
+                // An unrelated root file alongside `plugins/`, so
+                // `resolvePayloadRoot`'s single-top-level-directory
+                // collapse doesn't fire and the assertion below is
+                // actually exercising `mapPayload`'s `plugins/` subdir
+                // heuristic rather than its flat fallback landing on the
+                // same paths by coincidence.
+                "notes.txt": Data("not a recognized BepInEx subdir".utf8),
+            ])
+            let fullName = try await modManager.installFromFile(url: zipURL, gameDir: fakeGameDir) { print("  progress: \($0)") }
+            let expectedFullName = "Local-plugins-dir"
+            let dllPresent = fm.fileExists(atPath: fakeGameDir.appendingPathComponent("BepInEx/plugins/\(expectedFullName)/CoolPlugin/CoolPlugin.dll").path)
+            let assetPresent = fm.fileExists(atPath: fakeGameDir.appendingPathComponent("BepInEx/plugins/\(expectedFullName)/CoolPlugin/data/asset.bin").path)
+            let pass = fullName == expectedFullName && dllPresent && assetPresent
+            print("  fullName=\(fullName) (expect \(expectedFullName)) dll-present=\(dllPresent) data-present=\(assetPresent)")
+            print("  -> \(pass ? "PASS" : "FAIL")")
+        } catch {
+            print("  FAILED: \(error)")
+        }
+
+        print("")
+        print("(c) Thunderstore-style zip (manifest.json + icon.png + README.md + flat dll):")
+        do {
+            let manifestJSON = """
+            {"name": "CoolThunderMod", "version_number": "1.2.3", "author": "Willybach", "website_url": "https://example.invalid", "description": "A test mod.", "dependencies": []}
+            """
+            let zipURL = try await makeZipFixture(stagingRoot: stagingDir, name: "ts-style", entries: [
+                "manifest.json": Data(manifestJSON.utf8),
+                "icon.png": Data("not really a png".utf8),
+                "README.md": Data("# Cool Thunder Mod".utf8),
+                "CoolThunderMod.dll": Data("thunder dll".utf8),
+            ])
+            let fullName = try await modManager.installFromFile(url: zipURL, gameDir: fakeGameDir) { print("  progress: \($0)") }
+            let expectedFullName = "Willybach-CoolThunderMod"
+            let dllPresent = fm.fileExists(atPath: fakeGameDir.appendingPathComponent("BepInEx/plugins/\(expectedFullName)/CoolThunderMod.dll").path)
+            let metadataFiltered = !fm.fileExists(atPath: fakeGameDir.appendingPathComponent("BepInEx/plugins/\(expectedFullName)/manifest.json").path)
+                && !fm.fileExists(atPath: fakeGameDir.appendingPathComponent("BepInEx/plugins/\(expectedFullName)/icon.png").path)
+                && !fm.fileExists(atPath: fakeGameDir.appendingPathComponent("BepInEx/plugins/\(expectedFullName)/README.md").path)
+            let mod = await modManager.installedMod(fullName: expectedFullName)
+            let versionOK = mod?.version == "1.2.3"
+            let pass = fullName == expectedFullName && dllPresent && metadataFiltered && versionOK
+            print("  fullName=\(fullName) (expect \(expectedFullName)) dll-present=\(dllPresent) metadata-filtered=\(metadataFiltered) version=\(mod?.version ?? "nil") (expect 1.2.3)")
+            print("  -> \(pass ? "PASS" : "FAIL")")
+        } catch {
+            print("  FAILED: \(error)")
+        }
+
+        print("")
+        print("(d) bare .dll file, no zip:")
+        var bareDLLFullName: String?
+        do {
+            let bareDLLURL = stagingDir.appendingPathComponent("BareMod.dll")
+            try Data("bare dll contents".utf8).write(to: bareDLLURL)
+            let fullName = try await modManager.installFromFile(url: bareDLLURL, gameDir: fakeGameDir) { print("  progress: \($0)") }
+            bareDLLFullName = fullName
+            let expectedFullName = "Local-BareMod"
+            let dllPresent = fm.fileExists(atPath: fakeGameDir.appendingPathComponent("BepInEx/plugins/\(expectedFullName)/BareMod.dll").path)
+            let mod = await modManager.installedMod(fullName: expectedFullName)
+            let pass = fullName == expectedFullName && dllPresent && mod?.version == "0.0.0-local" && mod?.source == "local"
+            print("  fullName=\(fullName) (expect \(expectedFullName)) dll-present=\(dllPresent) version=\(mod?.version ?? "nil") source=\(mod?.source ?? "nil")")
+            print("  -> \(pass ? "PASS" : "FAIL")")
+        } catch {
+            print("  FAILED: \(error)")
+        }
+
+        print("")
+        print("(e) name collision: reinstalling over an existing local mod without/with replaceExisting:")
+        if let bareDLLFullName {
+            do {
+                let originalDLLURL = stagingDir.appendingPathComponent("BareMod.dll")
+                var collisionThrew = false
+                do {
+                    _ = try await modManager.installFromFile(url: originalDLLURL, gameDir: fakeGameDir)
+                } catch ModManager.ModManagerError.nameCollision(let fullName) {
+                    collisionThrew = (fullName == bareDLLFullName)
+                }
+                print("  reinstall without replaceExisting throws .nameCollision(\(bareDLLFullName)): \(collisionThrew)")
+
+                // Same derived identity (same file NAME, "BareMod.dll"),
+                // different content, from a different source path — proves
+                // `replaceExisting` actually uninstalls the old files
+                // before installing the new ones, rather than just
+                // silently overwriting on top.
+                let replacementDir = stagingDir.appendingPathComponent("replacement")
+                try fm.createDirectory(at: replacementDir, withIntermediateDirectories: true)
+                let replacementURL = replacementDir.appendingPathComponent("BareMod.dll")
+                try Data("REPLACED dll contents".utf8).write(to: replacementURL)
+
+                let replacedFullName = try await modManager.installFromFile(url: replacementURL, gameDir: fakeGameDir, replaceExisting: true) { print("  progress: \($0)") }
+                let installedURL = fakeGameDir.appendingPathComponent("BepInEx/plugins/\(bareDLLFullName)/BareMod.dll")
+                let installedContent = try? Data(contentsOf: installedURL)
+                let contentReplaced = installedContent == Data("REPLACED dll contents".utf8)
+                let manifestAfter = await modManager.loadManifest()
+                let singleEntry = manifestAfter.mods.filter { $0.fullName == bareDLLFullName }.count == 1
+                let pass = collisionThrew && replacedFullName == bareDLLFullName && contentReplaced && singleEntry
+                print("  after replace: fullName=\(replacedFullName) content-replaced=\(contentReplaced) exactly-one-manifest-entry=\(singleEntry)")
+                print("  -> \(pass ? "PASS" : "FAIL")")
+            } catch {
+                print("  FAILED: \(error)")
+            }
+        } else {
+            print("  SKIPPED: (d)'s bare-dll install didn't produce a full name to collide with")
+        }
+
+        print("")
+        print("(f) uninstall removes exactly the recorded files (other local mods untouched):")
+        do {
+            let expectedFullName = "Local-plugins-dir"
+            try await modManager.uninstall(fullName: expectedFullName, gameDir: fakeGameDir)
+            let dirGone = !fm.fileExists(atPath: fakeGameDir.appendingPathComponent("BepInEx/plugins/\(expectedFullName)").path)
+            let manifestGone = await !modManager.isInstalled(fullName: expectedFullName)
+            let flatDLLStillPresent = fm.fileExists(atPath: fakeGameDir.appendingPathComponent("BepInEx/plugins/Local-flat-dll/FlatMod.dll").path)
+            let thunderDLLStillPresent = fm.fileExists(atPath: fakeGameDir.appendingPathComponent("BepInEx/plugins/Willybach-CoolThunderMod/CoolThunderMod.dll").path)
+            let pass = dirGone && manifestGone && flatDLLStillPresent && thunderDLLStillPresent
+            print("  BepInEx/plugins/\(expectedFullName)/ removed: \(dirGone), manifest entry removed: \(manifestGone)")
+            print("  other local mods untouched: flat-dll=\(flatDLLStillPresent) ts-style=\(thunderDLLStillPresent)")
+            print("  -> \(pass ? "PASS" : "FAIL")")
+        } catch {
+            print("  FAILED: \(error)")
+        }
+
+        print("")
+        print("(g) old-manifest-without-source loads fine (backward compat):")
+        do {
+            let oldStyleManifestURL = root.appendingPathComponent("old-style-manifest.json")
+            assertUnderTempDir(oldStyleManifestURL, label: "install-from-file oldStyleManifestURL")
+            let oldStyleJSON = """
+            {
+              "loader": { "version": "5.4.2202" },
+              "mods": [
+                { "fullName": "Someone-OldMod", "version": "3.1.4", "enabled": true, "files": ["BepInEx/plugins/Someone-OldMod/OldMod.dll"] }
+              ]
+            }
+            """
+            try Data(oldStyleJSON.utf8).write(to: oldStyleManifestURL)
+            let compatModManager = ModManager(manifestURL: oldStyleManifestURL, launchDir: fakeLaunchDir)
+            let decoded = await compatModManager.loadManifest()
+            let mod = decoded.mods.first { $0.fullName == "Someone-OldMod" }
+            let pass = decoded.loader?.version == "5.4.2202" && mod?.version == "3.1.4" && mod?.enabled == true && mod?.source == "thunderstore"
+            print("  decoded loader=\(decoded.loader?.version ?? "nil") mod.version=\(mod?.version ?? "nil") mod.source=\(mod?.source ?? "nil") (expect thunderstore)")
+            print("  -> \(pass ? "PASS" : "FAIL")")
+        } catch {
+            print("  FAILED: \(error)")
+        }
+    }
+
+    /// Builds a `.zip` at `stagingRoot/<name>.zip` containing exactly
+    /// `entries` (relative path -> file contents), via `/usr/bin/zip` run
+    /// with its working directory set to a fresh throwaway subdirectory —
+    /// so the archive's entries are plain relative paths (the same shape a
+    /// real download would have) rather than embedding the temp
+    /// directory's own absolute path.
+    private static func makeZipFixture(stagingRoot: URL, name: String, entries: [String: Data]) async throws -> URL {
+        let fm = FileManager.default
+        let contentDir = stagingRoot.appendingPathComponent("\(name)-content-\(UUID().uuidString)")
+        assertUnderTempDir(contentDir, label: "zip fixture contentDir")
+        try fm.createDirectory(at: contentDir, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: contentDir) }
+
+        for (relativePath, data) in entries {
+            let fileURL = contentDir.appendingPathComponent(relativePath)
+            try fm.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try data.write(to: fileURL)
+        }
+
+        let zipURL = stagingRoot.appendingPathComponent("\(name).zip")
+        assertUnderTempDir(zipURL, label: "zip fixture zipURL")
+        if fm.fileExists(atPath: zipURL.path) {
+            try fm.removeItem(at: zipURL)
+        }
+
+        let result = try await ShellRunner.run("/usr/bin/zip", ["-r", "-X", zipURL.path, "."], currentDirectory: contentDir)
+        guard result.status == 0 else {
+            throw NSError(domain: "BifrostCheck", code: Int(result.status), userInfo: [NSLocalizedDescriptionKey: "zip exited \(result.status): \(result.stderr)"])
+        }
+        return zipURL
     }
 
     // MARK: - Wizard simulation

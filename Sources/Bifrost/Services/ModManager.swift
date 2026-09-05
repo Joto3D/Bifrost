@@ -19,6 +19,8 @@ actor ModManager {
         case extractionFailed(status: Int32)
         case emptyPayload(fullName: String)
         case notInstalled(fullName: String)
+        case unsupportedFileType(url: URL)
+        case nameCollision(fullName: String)
 
         var description: String {
             switch self {
@@ -34,6 +36,10 @@ actor ModManager {
                 return "Extracted archive for \(fullName) contained no recognizable mod files"
             case .notInstalled(let fullName):
                 return "\(fullName) is not installed"
+            case .unsupportedFileType(let url):
+                return "\(url.lastPathComponent) isn't a .zip or .dll file"
+            case .nameCollision(let fullName):
+                return "\(fullName) is already installed"
             }
         }
     }
@@ -435,11 +441,190 @@ actor ModManager {
         return String(url.path.dropFirst(basePath.count))
     }
 
-    private func recordInstalledMod(fullName: String, version: String, files: [String]) throws {
+    private func recordInstalledMod(fullName: String, version: String, files: [String], source: String = "thunderstore") throws {
         var manifest = loadManifest()
         manifest.mods.removeAll { $0.fullName == fullName }
-        manifest.mods.append(.init(fullName: fullName, version: version, enabled: true, files: files.sorted()))
+        manifest.mods.append(.init(fullName: fullName, version: version, enabled: true, files: files.sorted(), source: source))
         try save(manifest)
+    }
+
+    // MARK: - Install from file
+
+    /// A minimal, lenient decode of a Thunderstore-style `manifest.json` —
+    /// just enough to derive a stable identity and starting version for a
+    /// local install that happens to carry one. `author` isn't part of
+    /// Thunderstore's own documented schema (a package's author is site
+    /// metadata, not manifest content), but some community packaging tools
+    /// include it anyway, so it's read when present and folded into the
+    /// derived full name the same way Thunderstore's own "Author-Name"
+    /// convention would.
+    private struct LocalPackageManifest: Decodable {
+        let name: String?
+        let versionNumber: String?
+        let author: String?
+
+        enum CodingKeys: String, CodingKey {
+            case name
+            case versionNumber = "version_number"
+            case author
+        }
+    }
+
+    /// Replaces every character outside `[A-Za-z0-9]` with `-`, collapses
+    /// runs of `-`, and trims leading/trailing `-` — keeps a user-supplied
+    /// file name or a manifest's free-text `name`/`author` field safe to use
+    /// as a manifest full name and a `BepInEx/plugins` directory component.
+    private static func sanitizeForFullName(_ raw: String) -> String {
+        var result = String(raw.unicodeScalars.map { CharacterSet.alphanumerics.contains($0) ? Character($0) : "-" })
+        while result.contains("--") {
+            result = result.replacingOccurrences(of: "--", with: "-")
+        }
+        result = result.trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+        return result.isEmpty ? "Mod" : result
+    }
+
+    /// Derives the manifest identity for a local install: if `payloadRoot`
+    /// carries a parseable `manifest.json` with a non-empty `name`, uses
+    /// that (folded with `author` when present, Thunderstore-"Author-Name"
+    /// style; otherwise "Local-Name"), and its `version_number` when
+    /// present. Otherwise falls back to "Local-<sanitized fallbackStem>"
+    /// (the dropped-file or zip's own file name) and version
+    /// "0.0.0-local" — Thunderstore payloads carry no other reliable
+    /// version marker once extracted (see the type doc up top), and a
+    /// local file carries even less.
+    private static func resolveLocalIdentity(payloadRoot: URL?, fallbackStem: String) -> (fullName: String, version: String) {
+        guard let payloadRoot,
+              let data = try? Data(contentsOf: payloadRoot.appendingPathComponent("manifest.json")),
+              let manifest = try? JSONDecoder().decode(LocalPackageManifest.self, from: data),
+              let name = manifest.name, !name.isEmpty else {
+            return ("Local-\(sanitizeForFullName(fallbackStem))", "0.0.0-local")
+        }
+
+        let sanitizedName = sanitizeForFullName(name)
+        let fullName: String
+        if let author = manifest.author, !author.isEmpty {
+            fullName = "\(sanitizeForFullName(author))-\(sanitizedName)"
+        } else {
+            fullName = "Local-\(sanitizedName)"
+        }
+        let version = (manifest.versionNumber?.isEmpty == false) ? manifest.versionNumber! : "0.0.0-local"
+        return (fullName, version)
+    }
+
+    /// If `fullName` is already installed, either throws `.nameCollision`
+    /// (the caller should offer the user a replace/skip choice) or, when
+    /// `replaceExisting` is true, uninstalls the existing entry's files
+    /// first so the fresh install starts from a clean slate.
+    private func prepareForInstall(fullName: String, gameDir: URL, replaceExisting: Bool) throws {
+        guard isInstalled(fullName: fullName) else { return }
+        guard replaceExisting else { throw ModManagerError.nameCollision(fullName: fullName) }
+        try uninstall(fullName: fullName, gameDir: gameDir)
+    }
+
+    /// Installs a mod from a local `.zip` or bare `.dll` file — the
+    /// Nexus/GitHub/anywhere path, for mods that never went through
+    /// Thunderstore at all. A `.zip` is extracted with the same `ditto`
+    /// step `installMod` uses and mapped into `gameDir` with the exact
+    /// same r2modman-compatible heuristics (`mapPayload`): a `BepInEx/`
+    /// wrapper merges, `plugins`/`patchers`/`config`/`core` subdirs map
+    /// individually, and a flat payload (including a Thunderstore-style
+    /// zip carrying its own `manifest.json`/`icon.png`) falls back to one
+    /// `BepInEx/plugins/<fullName>/` folder with Thunderstore's own
+    /// metadata files filtered out. A bare `.dll` is copied straight into
+    /// its own `BepInEx/plugins/<stem>/` folder.
+    ///
+    /// The installed identity is derived by `resolveLocalIdentity` — from
+    /// a bundled `manifest.json` when the zip has one, otherwise from the
+    /// file's own name — and recorded with `source: "local"` so
+    /// `updatesAvailable` skips it and `uninstall`/`setEnabled` work
+    /// exactly as they do for a Thunderstore install.
+    ///
+    /// If the derived identity collides with an already-installed mod,
+    /// throws `ModManagerError.nameCollision` unless `replaceExisting` is
+    /// true, in which case the existing install is uninstalled first. On
+    /// success, returns the installed `fullName`.
+    @discardableResult
+    func installFromFile(
+        url: URL,
+        gameDir: URL,
+        replaceExisting: Bool = false,
+        onProgress: @Sendable (Progress) -> Void = { _ in }
+    ) async throws -> String {
+        switch url.pathExtension.lowercased() {
+        case "zip":
+            return try await installZipFile(url: url, gameDir: gameDir, replaceExisting: replaceExisting, onProgress: onProgress)
+        case "dll":
+            return try await installDLLFile(url: url, gameDir: gameDir, replaceExisting: replaceExisting, onProgress: onProgress)
+        default:
+            throw ModManagerError.unsupportedFileType(url: url)
+        }
+    }
+
+    private func installDLLFile(
+        url: URL,
+        gameDir: URL,
+        replaceExisting: Bool,
+        onProgress: @Sendable (Progress) -> Void
+    ) async throws -> String {
+        let fm = FileManager.default
+        let (fullName, version) = Self.resolveLocalIdentity(payloadRoot: nil, fallbackStem: url.deletingPathExtension().lastPathComponent)
+
+        try prepareForInstall(fullName: fullName, gameDir: gameDir, replaceExisting: replaceExisting)
+
+        onProgress(.copyingFiles(fullName: fullName))
+        let destDir = gameDir.appendingPathComponent("BepInEx/plugins/\(fullName)")
+        try fm.createDirectory(at: destDir, withIntermediateDirectories: true)
+        let destURL = destDir.appendingPathComponent(url.lastPathComponent)
+        if fm.fileExists(atPath: destURL.path) {
+            try fm.removeItem(at: destURL)
+        }
+        try fm.copyItem(at: url, to: destURL)
+        let relative = relativePath(of: destURL, from: gameDir)
+
+        _ = try? await ShellRunner.run("/usr/bin/xattr", ["-d", "com.apple.quarantine", destURL.path])
+
+        try recordInstalledMod(fullName: fullName, version: version, files: [relative], source: "local")
+        onProgress(.done(fullName: fullName))
+        return fullName
+    }
+
+    private func installZipFile(
+        url: URL,
+        gameDir: URL,
+        replaceExisting: Bool,
+        onProgress: @Sendable (Progress) -> Void
+    ) async throws -> String {
+        let fm = FileManager.default
+        let zipStem = url.deletingPathExtension().lastPathComponent
+
+        let workDir = fm.temporaryDirectory.appendingPathComponent("Bifrost-LocalInstall-\(UUID().uuidString)")
+        try fm.createDirectory(at: workDir, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: workDir) }
+
+        onProgress(.extracting(fullName: zipStem))
+        let extractDir = workDir.appendingPathComponent("extracted")
+        try fm.createDirectory(at: extractDir, withIntermediateDirectories: true)
+        let dittoResult = try await ShellRunner.run("/usr/bin/ditto", ["-xk", url.path, extractDir.path])
+        guard dittoResult.status == 0 else {
+            throw ModManagerError.extractionFailed(status: dittoResult.status)
+        }
+
+        let payloadRoot = try resolvePayloadRoot(extractDir: extractDir)
+        let (fullName, version) = Self.resolveLocalIdentity(payloadRoot: payloadRoot, fallbackStem: zipStem)
+
+        try prepareForInstall(fullName: fullName, gameDir: gameDir, replaceExisting: replaceExisting)
+
+        onProgress(.copyingFiles(fullName: fullName))
+        let writtenFiles = try mapPayload(from: payloadRoot, gameDir: gameDir, fullName: fullName)
+        guard !writtenFiles.isEmpty else { throw ModManagerError.emptyPayload(fullName: fullName) }
+
+        for relativePath in writtenFiles {
+            _ = try? await ShellRunner.run("/usr/bin/xattr", ["-d", "com.apple.quarantine", gameDir.appendingPathComponent(relativePath).path])
+        }
+
+        try recordInstalledMod(fullName: fullName, version: version, files: writtenFiles, source: "local")
+        onProgress(.done(fullName: fullName))
+        return fullName
     }
 
     // MARK: - Uninstall
@@ -519,10 +704,13 @@ actor ModManager {
 
     /// Compares every installed mod's recorded version against `index`'s
     /// current latest, returning one entry per mod that has a newer
-    /// version available.
+    /// version available. Mods installed from a local file (`source ==
+    /// "local"`) are never in the Thunderstore index under their derived
+    /// identity, so they're skipped outright rather than compared.
     func updatesAvailable(index: [ThunderstorePackage]) -> [UpdateInfo] {
         let byFullName = Dictionary(uniqueKeysWithValues: index.map { ($0.fullName, $0) })
         return loadManifest().mods.compactMap { mod in
+            guard mod.source != "local" else { return nil }
             guard let latest = byFullName[mod.fullName]?.latestVersion, latest.versionNumber != mod.version else {
                 return nil
             }
@@ -535,6 +723,9 @@ actor ModManager {
     func update(fullName: String, index: [ThunderstorePackage], gameDir: URL, onProgress: @Sendable (Progress) -> Void = { _ in }) async throws {
         guard let mod = loadManifest().mods.first(where: { $0.fullName == fullName }) else {
             throw ModManagerError.notInstalled(fullName: fullName)
+        }
+        guard mod.source != "local" else {
+            throw ModManagerError.packageNotFound(fullName: fullName) // no Thunderstore identity to update against
         }
         guard let package = index.first(where: { $0.fullName == fullName }) else {
             throw ModManagerError.packageNotFound(fullName: fullName)

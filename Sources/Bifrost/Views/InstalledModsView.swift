@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Installed tab: lists every mod in Bifrost's manifest (not a live disk
 /// scan) with per-mod enable/disable, update, and remove actions, plus
@@ -11,6 +12,22 @@ struct InstalledModsView: View {
         case failed(String)
     }
 
+    /// One pending "this name is already installed" decision, surfaced as
+    /// a confirmation dialog while `installFiles` is mid-loop — the
+    /// continuation is resumed from the dialog's own button actions
+    /// (`true` for Replace, `false` for Skip/dismiss), which is what lets
+    /// an `async` install loop await a UI decision without threading extra
+    /// state through `ModManager`.
+    private struct CollisionPrompt: Identifiable {
+        let id = UUID()
+        let fullName: String
+        let continuation: CheckedContinuation<Bool, Never>
+    }
+
+    /// The file types accepted by both the "Install from File…" picker and
+    /// the whole-window drop target (see `MainWindow`).
+    private static let importableContentTypes: [UTType] = [.zip, UTType(filenameExtension: "dll") ?? .data]
+
     @Environment(AppState.self) private var appState
     @State private var client = ThunderstoreClient()
     @State private var indexState: IndexState = .idle
@@ -19,6 +36,9 @@ struct InstalledModsView: View {
     @State private var pendingRemoval: InstalledManifest.InstalledMod?
     @State private var statusLine: String?
     @State private var profilesSheetPresented = false
+    @State private var fileImporterPresented = false
+    @State private var isInstallingFromFile = false
+    @State private var collisionPrompt: CollisionPrompt?
 
     /// Every `.cfg` file discovered under `BepInEx/config`, cached until
     /// the next `loadConfigs()` (initial load, "Check for Updates", or the
@@ -43,6 +63,11 @@ struct InstalledModsView: View {
             await loadIndexAndCheckUpdates(force: false)
             await loadConfigs()
         }
+        .onChange(of: appState.pendingFileDrop) { _, dropped in
+            guard !dropped.isEmpty else { return }
+            appState.pendingFileDrop = []
+            Task { await installFiles(dropped) }
+        }
         .confirmationDialog(
             "Remove \(pendingRemoval?.fullName ?? "")?",
             isPresented: Binding(
@@ -58,6 +83,29 @@ struct InstalledModsView: View {
         } message: { mod in
             Text("Deletes \(mod.files.count) file\(mod.files.count == 1 ? "" : "s") from BepInEx. Config files are left alone.")
         }
+        .confirmationDialog(
+            "\(collisionPrompt?.fullName ?? "") is already installed",
+            isPresented: Binding(
+                get: { collisionPrompt != nil },
+                set: { isPresented in
+                    guard !isPresented, let prompt = collisionPrompt else { return }
+                    prompt.continuation.resume(returning: false)
+                    collisionPrompt = nil
+                }
+            ),
+            presenting: collisionPrompt
+        ) { prompt in
+            Button("Replace", role: .destructive) {
+                prompt.continuation.resume(returning: true)
+                collisionPrompt = nil
+            }
+            Button("Skip", role: .cancel) {
+                prompt.continuation.resume(returning: false)
+                collisionPrompt = nil
+            }
+        } message: { prompt in
+            Text("Replacing removes \(prompt.fullName)'s currently installed files before installing the new ones.")
+        }
         .sheet(isPresented: $profilesSheetPresented) {
             ProfilesSheetView()
         }
@@ -66,6 +114,18 @@ struct InstalledModsView: View {
         }
         .sheet(item: $configEditorTarget) { config in
             ConfigEditorView(url: config.url, title: config.associatedFullName ?? config.fileName)
+        }
+        .fileImporter(
+            isPresented: $fileImporterPresented,
+            allowedContentTypes: Self.importableContentTypes,
+            allowsMultipleSelection: true
+        ) { result in
+            switch result {
+            case .success(let urls):
+                Task { await installFiles(urls) }
+            case .failure(let error):
+                statusLine = "Couldn't open file picker: \(error.localizedDescription)"
+            }
         }
     }
 
@@ -81,6 +141,18 @@ struct InstalledModsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+
+            if isInstallingFromFile {
+                ProgressView()
+                    .controlSize(.small)
+            }
+
+            Button {
+                fileImporterPresented = true
+            } label: {
+                Label("Install from File…", systemImage: "tray.and.arrow.down")
+            }
+            .disabled(appState.status.gameFound == nil || isInstallingFromFile)
 
             Button {
                 Task { await loadIndexAndCheckUpdates(force: true) }
@@ -150,6 +222,9 @@ struct InstalledModsView: View {
             Text("No mods yet — find some in Browse")
                 .font(Theme.headingFont(15))
             Text("Installed mods, their versions, and their configs will show up here.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text("Or drop a mod's .zip/.dll file anywhere in this window, or use \u{201c}Install from File\u{2026}\u{201d} above.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -243,6 +318,79 @@ struct InstalledModsView: View {
         }
     }
 
+    /// Installs every dropped/picked `.zip`/`.dll` file in `urls`, in
+    /// order, then does the same manifest-refresh + profile-sync dance the
+    /// other mutating actions (`setEnabled`, `update`, `remove`) already do
+    /// so the Installed list, update badges, and active profile all stay
+    /// in sync afterward. A name collision on any one file pauses that
+    /// file (via `confirmReplace`'s dialog) without blocking the rest of
+    /// the batch; any other failure is recorded and reported once at the
+    /// end rather than aborting the remaining files.
+    private func installFiles(_ urls: [URL]) async {
+        guard let gameDir = appState.status.gameFound else {
+            statusLine = "Can't install from file — locate the game directory first"
+            return
+        }
+        guard !urls.isEmpty else { return }
+
+        isInstallingFromFile = true
+        defer { isInstallingFromFile = false }
+
+        var installedCount = 0
+        var skippedCount = 0
+        var lastFailure: String?
+
+        for url in urls {
+            do {
+                if try await installOneFile(url, gameDir: gameDir) != nil {
+                    installedCount += 1
+                } else {
+                    skippedCount += 1
+                }
+            } catch {
+                lastFailure = "\(url.lastPathComponent): \(error.localizedDescription)"
+            }
+        }
+
+        await appState.refreshManifest()
+        await appState.syncActiveProfileWithManifest()
+        await loadIndexAndCheckUpdates(force: false)
+
+        var summary = installedCount > 0 ? "Installed \(installedCount) mod\(installedCount == 1 ? "" : "s") from file" : ""
+        if skippedCount > 0 {
+            summary += summary.isEmpty ? "Skipped \(skippedCount) file\(skippedCount == 1 ? "" : "s")" : ", skipped \(skippedCount)"
+        }
+        if let lastFailure {
+            summary += summary.isEmpty ? "Couldn't install: \(lastFailure)" : " — \(lastFailure)"
+        }
+        if !summary.isEmpty {
+            statusLine = summary
+        }
+    }
+
+    /// Installs one file, handling a name collision by awaiting the user's
+    /// replace/skip choice (`confirmReplace`) and retrying with
+    /// `replaceExisting: true` only if they chose Replace. Returns the
+    /// installed full name, or `nil` if the user chose to skip a
+    /// collision (not an error — just nothing to count).
+    private func installOneFile(_ url: URL, gameDir: URL) async throws -> String? {
+        do {
+            return try await appState.modManager.installFromFile(url: url, gameDir: gameDir)
+        } catch ModManager.ModManagerError.nameCollision(let fullName) {
+            guard await confirmReplace(fullName: fullName) else { return nil }
+            return try await appState.modManager.installFromFile(url: url, gameDir: gameDir, replaceExisting: true)
+        }
+    }
+
+    /// Suspends until the "already installed" confirmation dialog resolves
+    /// (Replace -> `true`, Skip or dismiss -> `false`) — see
+    /// `CollisionPrompt`.
+    private func confirmReplace(fullName: String) async -> Bool {
+        await withCheckedContinuation { continuation in
+            collisionPrompt = CollisionPrompt(fullName: fullName, continuation: continuation)
+        }
+    }
+
     private func remove(_ mod: InstalledManifest.InstalledMod) async {
         guard let gameDir = appState.status.gameFound else { return }
         pendingRemoval = nil
@@ -282,6 +430,10 @@ private struct InstalledModRow: View {
                 HStack(spacing: 6) {
                     Text(mod.fullName)
                         .font(.body.weight(.semibold))
+                    if mod.source == "local" {
+                        Chip(text: "local", systemImage: "internaldrive")
+                            .help("Installed from a local file — not checked against Thunderstore for updates")
+                    }
                     if update != nil {
                         AuroraBadge(text: "Update", systemImage: "arrow.up.circle.fill")
                     }

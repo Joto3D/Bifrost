@@ -21,6 +21,17 @@ final class AppState {
     /// alert modifier (see `View.bifrostErrorAlert`), if any.
     var lastError: BifrostError?
 
+    /// `.zip`/`.dll` files most recently dropped onto the window's
+    /// whole-window drop target (see `MainWindow`), waiting to be
+    /// installed. `MainWindow` sits above `InstalledModsView` in the view
+    /// hierarchy and owns the drop target so dropping works regardless of
+    /// which tab is active, but the actual install flow (progress,
+    /// collision confirmation, manifest refresh) belongs with the rest of
+    /// `InstalledModsView`'s mod-management state — this property is the
+    /// hand-off between the two. `InstalledModsView` observes it, drains it
+    /// via `installFiles`, and resets it to `[]` once processed.
+    var pendingFileDrop: [URL] = []
+
     let modManager = ModManager()
     let profileStore: ProfileStore
 

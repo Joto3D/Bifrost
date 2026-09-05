@@ -12,11 +12,20 @@ enum ShellRunner {
     /// Runs `executable` with `args`, waiting for completion off the main
     /// thread. Throws if the process cannot be launched at all; a non-zero
     /// exit status is reported via `status`, not a thrown error.
-    static func run(_ executable: String, _ args: [String] = []) async throws -> Result {
+    ///
+    /// - Parameter currentDirectory: When given, the process is launched
+    ///   with this as its working directory — used by `--check`'s
+    ///   "install from file" fixtures to run `/usr/bin/zip` against
+    ///   relative paths so the resulting archive doesn't embed the temp
+    ///   directory's absolute path in every entry.
+    static func run(_ executable: String, _ args: [String] = [], currentDirectory: URL? = nil) async throws -> Result {
         try await withCheckedThrowingContinuation { continuation in
             let process = Process()
             process.executableURL = URL(fileURLWithPath: executable)
             process.arguments = args
+            if let currentDirectory {
+                process.currentDirectoryURL = currentDirectory
+            }
 
             let stdoutPipe = Pipe()
             let stderrPipe = Pipe()
