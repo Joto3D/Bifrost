@@ -11,10 +11,23 @@ struct SettingsView: View {
         case failed(String)
     }
 
+    /// Result of the "Validate" button in the Nexus Mods section.
+    private enum NexusValidationState: Equatable {
+        case idle
+        case success(name: String, isPremium: Bool)
+        case failed(String)
+    }
+
     @Environment(AppState.self) private var appState
     @Environment(ThemeStore.self) private var themeStore
     @State private var indexRefreshState: IndexRefreshState = .idle
     @AppStorage(Launcher.startSteamSilentlyDefaultsKey) private var startSteamSilently = true
+
+    // MARK: - Nexus Mods section state
+    @State private var nexusAPIKeyInput = ""
+    @State private var nexusKeySaved = Keychain.read(service: Keychain.nexusAPIKeyService) != nil
+    @State private var nexusValidation: NexusValidationState = .idle
+    @State private var isValidatingNexusKey = false
 
     var body: some View {
         Form {
@@ -106,12 +119,109 @@ struct SettingsView: View {
                 .disabled(appState.status.gameFound == nil)
             }
 
+            Section("Nexus Mods") {
+                nexusAPIKeyRow
+
+                HStack(spacing: 10) {
+                    Button {
+                        Task { await validateNexusKey() }
+                    } label: {
+                        Label("Validate", systemImage: "checkmark.shield")
+                    }
+                    .disabled(!nexusKeySaved || isValidatingNexusKey)
+
+                    if isValidatingNexusKey {
+                        ProgressView()
+                            .controlSize(.small)
+                    }
+
+                    switch nexusValidation {
+                    case .success(let name, let isPremium):
+                        Text("Connected as \(name) (\(isPremium ? "Premium" : "Free"))")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    case .failed(let message):
+                        Text(message)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                    case .idle:
+                        EmptyView()
+                    }
+                }
+
+                Button {
+                    if let url = URL(string: "https://www.nexusmods.com/users/myaccount?tab=api") {
+                        NSWorkspace.shared.open(url)
+                    }
+                } label: {
+                    Label("Get your API key", systemImage: "arrow.up.right.square")
+                }
+
+                Text("On any Valheim mod page, click \u{201c}Mod Manager Download\u{201d} — Bifrost will catch it and install.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Section {
                 aboutFooter
             }
         }
         .formStyle(.grouped)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    // MARK: - Nexus Mods
+
+    @ViewBuilder
+    private var nexusAPIKeyRow: some View {
+        if nexusKeySaved {
+            HStack {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+                Text("API key saved")
+                    .font(.subheadline)
+                Spacer()
+                Button("Remove", role: .destructive) {
+                    Keychain.delete(service: Keychain.nexusAPIKeyService)
+                    nexusKeySaved = false
+                    nexusAPIKeyInput = ""
+                    nexusValidation = .idle
+                }
+            }
+        } else {
+            HStack {
+                SecureField("Nexus API key", text: $nexusAPIKeyInput)
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit { saveNexusAPIKey() }
+                Button("Save") { saveNexusAPIKey() }
+                    .disabled(nexusAPIKeyInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+        }
+    }
+
+    private func saveNexusAPIKey() {
+        let trimmed = nexusAPIKeyInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        do {
+            try Keychain.save(trimmed, service: Keychain.nexusAPIKeyService)
+            nexusKeySaved = true
+            nexusAPIKeyInput = ""
+            nexusValidation = .idle
+        } catch {
+            nexusValidation = .failed("Couldn't save key: \(error)")
+        }
+    }
+
+    private func validateNexusKey() async {
+        guard let key = Keychain.read(service: Keychain.nexusAPIKeyService) else { return }
+        isValidatingNexusKey = true
+        defer { isValidatingNexusKey = false }
+        do {
+            let result = try await NexusClient().validateKey(key)
+            nexusValidation = .success(name: result.name, isPremium: result.isPremium)
+        } catch {
+            nexusValidation = .failed("\(error)")
+        }
     }
 
     // MARK: - Paths

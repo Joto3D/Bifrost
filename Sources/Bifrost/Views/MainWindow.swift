@@ -48,6 +48,10 @@ struct MainWindow: View {
             if isDropTargeted {
                 dropOverlay
             }
+
+            if case .inProgress(let message) = appState.nexusInstallState {
+                nexusInstallBanner(message)
+            }
         }
         .onDrop(of: [.fileURL], isTargeted: $isDropTargeted) { providers in
             handleDrop(providers)
@@ -91,6 +95,30 @@ struct MainWindow: View {
         .allowsHitTesting(false)
         .transition(.opacity)
         .animation(Theme.settle, value: isDropTargeted)
+    }
+
+    /// A small non-blocking status pill for an in-flight `nxm://` install
+    /// (see `AppState.handleNexusLink`) — deliberately much less intrusive
+    /// than `dropOverlay` since it can appear at any time from outside the
+    /// app (a browser click), not from an in-window gesture the user is
+    /// already looking at.
+    private func nexusInstallBanner(_ message: String) -> some View {
+        VStack {
+            Spacer()
+            HStack(spacing: 8) {
+                ProgressView()
+                    .controlSize(.small)
+                Text(message)
+                    .font(.caption)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 8)
+            .background(.regularMaterial, in: Capsule())
+            .padding(.bottom, 24)
+        }
+        .allowsHitTesting(false)
+        .transition(.opacity)
+        .animation(Theme.settle, value: appState.nexusInstallState)
     }
 
     /// Resolves every dropped item provider to a file `URL` off the main

@@ -16,6 +16,16 @@ normally fiddly to do by hand:
 - **Thunderstore mod manager** — browse, install, update, enable/disable,
   and remove mods from the [Thunderstore](https://thunderstore.io) Valheim
   mod repository, with automatic dependency resolution.
+- **Nexus Mods "Mod Manager Download"** — add your API key in Settings →
+  Nexus Mods, then click "Mod Manager Download" on any Valheim mod page on
+  [Nexus Mods](https://www.nexusmods.com/valheim) and Bifrost catches the
+  `nxm://` link and installs it, the same way Vortex or r2modman would.
+  Free accounts work too (via the "Slow download" tab's Mod Manager
+  Download button); update checks for these mods compare against Nexus
+  directly rather than Thunderstore. macOS only registers Bifrost for the
+  `nxm://` scheme (via `CFBundleURLTypes` in `Info.plist`) once the bundled
+  `.app` has been opened at least once — build and launch `build/Bifrost.app`
+  (see below) before trying a Nexus link, not `swift run`.
 
 ## Requirements
 
@@ -116,6 +126,7 @@ Steam's own launch path.
 | Launch wrapper + mode file + wrapper.log | `~/Library/Application Support/Bifrost/launch/` |
 | BepInEx's own log | `<Valheim folder>/BepInEx/LogOutput.log` |
 | Steam launch options | your Steam profile's `localconfig.vdf` (`~/Library/Application Support/Steam/userdata/<id>/config/`) |
+| Nexus Mods API key | macOS Keychain (service `Bifrost-NexusAPIKey`) — never in a file on disk |
 
 Settings has "Reveal in Finder" buttons for all of these, plus shortcuts
 to open both logs directly.

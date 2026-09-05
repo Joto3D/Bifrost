@@ -110,6 +110,10 @@ enum DebugCheck {
         print("")
         print("== Config editor ==")
         await checkConfigEditor(realGameDir: located?.directory)
+
+        print("")
+        print("== Nexus Mods ==")
+        await checkNexus()
     }
 
     // MARK: - Safety guard
@@ -1596,6 +1600,279 @@ enum DebugCheck {
             print("  denikson-BepInExPack_Valheim@\(meta.latest.versionNumber) markdown length: \(decoded.markdown.count) -> \(nonEmpty ? "PASS" : "FAIL")")
         } catch {
             print("  skipped: \(error) (likely offline)")
+        }
+    }
+
+    // MARK: - Nexus Mods
+
+    /// Exercises the Nexus Mods integration end to end without ever making
+    /// a real API call unless the user's REAL Keychain already has a real
+    /// key configured (section 5 below, explicitly read-only): `nxm://`
+    /// link parsing, the manifest's new `nexusModId`/`nexusFileId` fields
+    /// (round-trip + backward compat for a manifest written before they
+    /// existed, and before `af4a754`'s `source` field existed at all), an
+    /// identity-override install driven entirely by injected metadata (no
+    /// network — a fixture zip built the same way `checkInstallFromFile`
+    /// builds its own), and a Keychain save/read/delete round-trip against
+    /// a dedicated TEST service name that never touches the real
+    /// `"Bifrost-NexusAPIKey"` entry.
+    private static func checkNexus() async {
+        print("1) nxm:// link parsing:")
+        checkNxmLinkParsing()
+
+        print("")
+        print("2) manifest nexusModId/nexusFileId round-trip + backward compat:")
+        checkNexusManifestCompat()
+
+        print("")
+        print("3) identity-override install (no network):")
+        await checkNexusIdentityOverrideInstall()
+
+        print("")
+        print("4) Keychain round-trip (TEST service, real service untouched):")
+        checkNexusKeychainRoundTrip()
+
+        print("")
+        print("5) live API (best effort, skips gracefully with no key configured):")
+        await checkNexusLiveAPI()
+    }
+
+    private static func checkNxmLinkParsing() {
+        // (a) full free-account "Slow download" link: game/mod/file ids
+        // plus the key+expires query params a non-premium download_link
+        // call requires.
+        if let url = URL(string: "nxm://valheim/mods/1030/files/4242?key=abc123&expires=1700000000&user_id=99") {
+            let parsed = try? NxmLink.parse(url)
+            let pass = parsed?.gameDomain == "valheim" && parsed?.modId == 1030 && parsed?.fileId == 4242
+                && parsed?.key == "abc123" && parsed?.expires == "1700000000"
+            print("  full link (key+expires): mod=\(parsed?.modId.description ?? "nil") file=\(parsed?.fileId.description ?? "nil") key=\(parsed?.key ?? "nil") expires=\(parsed?.expires ?? "nil") -> \(pass ? "PASS" : "FAIL")")
+        } else {
+            print("  full link: FAILED to construct fixture URL")
+        }
+
+        // (b) premium link: no key/expires at all — a premium API key
+        // works against download_link.json without them.
+        if let url = URL(string: "nxm://valheim/mods/1030/files/4242") {
+            let parsed = try? NxmLink.parse(url)
+            let pass = parsed?.modId == 1030 && parsed?.fileId == 4242 && parsed?.key == nil && parsed?.expires == nil
+            print("  premium link (no key/expires): parsed=\(parsed != nil) key=\(parsed?.key ?? "nil") expires=\(parsed?.expires ?? "nil") -> \(pass ? "PASS" : "FAIL")")
+        } else {
+            print("  premium link: FAILED to construct fixture URL")
+        }
+
+        // (c) wrong game: rejected, naming the game domain it actually was.
+        if let url = URL(string: "nxm://skyrimspecialedition/mods/1/files/1") {
+            var rejectedWithDomain = false
+            do {
+                _ = try NxmLink.parse(url)
+            } catch NxmLink.ParseError.wrongGame(let game) {
+                rejectedWithDomain = (game == "skyrimspecialedition")
+            } catch {
+                // wrong error case — leave rejectedWithDomain false
+            }
+            print("  wrong-game link rejected, domain named correctly: \(rejectedWithDomain) -> \(rejectedWithDomain ? "PASS" : "FAIL")")
+        } else {
+            print("  wrong-game link: FAILED to construct fixture URL")
+        }
+
+        // (d) malformed: wrong scheme, missing path segment, non-numeric id.
+        let malformedCases: [(String, URL?)] = [
+            ("wrong scheme", URL(string: "https://valheim/mods/1/files/1")),
+            ("missing files segment", URL(string: "nxm://valheim/mods/1")),
+            ("non-numeric mod id", URL(string: "nxm://valheim/mods/abc/files/1")),
+        ]
+        var allMalformedRejected = true
+        for (name, url) in malformedCases {
+            guard let url else {
+                print("  \(name): FAILED to construct fixture URL")
+                allMalformedRejected = false
+                continue
+            }
+            var rejected = false
+            do {
+                _ = try NxmLink.parse(url)
+            } catch NxmLink.ParseError.malformed {
+                rejected = true
+            } catch {
+                // wrong error case — leave rejected false
+            }
+            allMalformedRejected = allMalformedRejected && rejected
+            print("  \(name) -> rejected as malformed: \(rejected)")
+        }
+        print("  -> \(allMalformedRejected ? "PASS" : "FAIL")")
+    }
+
+    private static func checkNexusManifestCompat() {
+        let nexusMod = InstalledManifest.InstalledMod(
+            fullName: "Somebody-CoolMod",
+            version: "2.0.0",
+            enabled: true,
+            files: ["BepInEx/plugins/Somebody-CoolMod/CoolMod.dll"],
+            source: "nexus",
+            nexusModId: 1030,
+            nexusFileId: 4242
+        )
+        let manifest = InstalledManifest(loader: nil, mods: [nexusMod])
+
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        guard let data = try? encoder.encode(manifest),
+              let decoded = try? JSONDecoder().decode(InstalledManifest.self, from: data),
+              let decodedMod = decoded.mods.first else {
+            print("  FAILED: could not encode/decode a nexus-sourced manifest entry")
+            return
+        }
+        let roundTripOK = decodedMod == nexusMod
+        print("  round-trip (source=nexus, nexusModId/nexusFileId present): \(roundTripOK) -> \(roundTripOK ? "PASS" : "FAIL")")
+
+        // A manifest predating BOTH `source` (af4a754) and
+        // `nexusModId`/`nexusFileId` (this change) — must still decode,
+        // every new field defaulting sensibly, rather than failing to
+        // load entirely. Same fixture shape checkInstallFromFile's (g)
+        // uses, kept here too since this section is what actually claims
+        // "the nexusModId/nexusFileId addition doesn't break old
+        // manifests."
+        let veryOldJSON = """
+        {
+          "loader": { "version": "5.4.2202" },
+          "mods": [
+            { "fullName": "Someone-OldMod", "version": "3.1.4", "enabled": true, "files": ["BepInEx/plugins/Someone-OldMod/OldMod.dll"] }
+          ]
+        }
+        """
+        guard let oldData = veryOldJSON.data(using: .utf8),
+              let oldDecoded = try? JSONDecoder().decode(InstalledManifest.self, from: oldData),
+              let oldMod = oldDecoded.mods.first else {
+            print("  FAILED: could not decode a pre-nexus-fields manifest fixture")
+            return
+        }
+        let backwardCompatOK = oldMod.source == "thunderstore" && oldMod.nexusModId == nil && oldMod.nexusFileId == nil
+        print("  pre-existing manifest (no source, no nexusModId/nexusFileId) decodes: source=\(oldMod.source) nexusModId=\(oldMod.nexusModId.map(String.init) ?? "nil") nexusFileId=\(oldMod.nexusFileId.map(String.init) ?? "nil") -> \(backwardCompatOK ? "PASS" : "FAIL")")
+    }
+
+    /// Drives `ModManager.installFromFile`'s `identityOverride` parameter
+    /// against a throwaway TEMP fixture (guarded by `assertUnderTempDir`,
+    /// same pattern as `checkInstallFromFile`) — no network involved at
+    /// all, since the fixture zip is built locally with `makeZipFixture`
+    /// and the "Nexus" metadata is simply injected. This is the same
+    /// pipeline `installFromNexus` calls after it resolves a real
+    /// download; the only thing that section adds on top is the network
+    /// download step itself, which needs a real key to test live (see
+    /// `checkNexusLiveAPI`).
+    private static func checkNexusIdentityOverrideInstall() async {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent("BifrostCheck-nexusinstall-\(UUID().uuidString)")
+        let fakeGameDir = root.appendingPathComponent("game")
+        let fakeManifestURL = root.appendingPathComponent("manifest.json")
+        let fakeLaunchDir = root.appendingPathComponent("launch")
+        let stagingDir = root.appendingPathComponent("staging")
+        assertUnderTempDir(fakeGameDir, label: "nexus install fakeGameDir")
+        assertUnderTempDir(fakeManifestURL, label: "nexus install fakeManifestURL")
+        assertUnderTempDir(fakeLaunchDir, label: "nexus install fakeLaunchDir")
+        assertUnderTempDir(stagingDir, label: "nexus install stagingDir")
+        defer { try? fm.removeItem(at: root) }
+
+        do {
+            try fm.createDirectory(at: fakeGameDir, withIntermediateDirectories: true)
+            try fm.createDirectory(at: stagingDir, withIntermediateDirectories: true)
+        } catch {
+            print("  skipped: could not create fixture directories: \(error)")
+            return
+        }
+
+        let modManager = ModManager(manifestURL: fakeManifestURL, launchDir: fakeLaunchDir)
+
+        do {
+            // Shaped like a real Nexus download: a flat .dll at the root,
+            // no manifest.json at all — proves the override wins outright
+            // over resolveLocalIdentity's own guessing rather than merely
+            // supplementing it.
+            let zipURL = try await makeZipFixture(stagingRoot: stagingDir, name: "nexus-mod", entries: [
+                "ValheimPlus.dll": Data("nexus mod dll contents".utf8),
+            ])
+            let override = ModManager.IdentityOverride(
+                fullName: "Nexus-Author-ValheimPlus",
+                version: "9.9.9",
+                source: "nexus",
+                nexusModId: 1030,
+                nexusFileId: 4242
+            )
+            let fullName = try await modManager.installFromFile(
+                url: zipURL,
+                gameDir: fakeGameDir,
+                identityOverride: override
+            ) { print("  progress: \($0)") }
+
+            let expectedRelative = "BepInEx/plugins/\(override.fullName)/ValheimPlus.dll"
+            let dllPresent = fm.fileExists(atPath: fakeGameDir.appendingPathComponent(expectedRelative).path)
+            let mod = await modManager.installedMod(fullName: override.fullName)
+            let fieldsOK = mod?.version == override.version && mod?.source == "nexus"
+                && mod?.nexusModId == override.nexusModId && mod?.nexusFileId == override.nexusFileId
+            let filesOK = mod?.files == [expectedRelative]
+            let pass = fullName == override.fullName && dllPresent && fieldsOK && filesOK
+
+            print("  fullName=\(fullName) (expect \(override.fullName)) dll-present=\(dllPresent)")
+            print("  manifest entry: version=\(mod?.version ?? "nil") source=\(mod?.source ?? "nil") nexusModId=\(mod?.nexusModId.map(String.init) ?? "nil") nexusFileId=\(mod?.nexusFileId.map(String.init) ?? "nil")")
+            print("  files recorded: \(mod?.files ?? [])")
+            print("  -> \(pass ? "PASS" : "FAIL")")
+        } catch {
+            print("  FAILED: \(error)")
+        }
+    }
+
+    /// Save/read/delete round-trip against a dedicated TEST Keychain
+    /// service name — never `Keychain.nexusAPIKeyService`, so this never
+    /// touches whatever real API key this developer has configured
+    /// through Settings.
+    private static func checkNexusKeychainRoundTrip() {
+        let testService = "Bifrost-NexusAPIKey-check"
+        // Defensive: clear any leftover from a prior interrupted run
+        // before asserting a clean save/read/delete cycle.
+        Keychain.delete(service: testService)
+
+        let testValue = "test-api-key-\(UUID().uuidString)"
+        do {
+            try Keychain.save(testValue, service: testService)
+        } catch {
+            print("  FAILED to save: \(error)")
+            return
+        }
+        let readBack = Keychain.read(service: testService)
+        let saveReadOK = readBack == testValue
+        print("  save then read back matches: \(saveReadOK) -> \(saveReadOK ? "PASS" : "FAIL")")
+
+        let deleted = Keychain.delete(service: testService)
+        let goneAfterDelete = Keychain.read(service: testService) == nil
+        let deleteOK = deleted && goneAfterDelete
+        print("  delete succeeds and read-after-delete is nil: deleted=\(deleted) gone=\(goneAfterDelete) -> \(deleteOK ? "PASS" : "FAIL")")
+
+        print("  real service (\"\(Keychain.nexusAPIKeyService)\") never touched by this section")
+    }
+
+    /// Best-effort live check: only runs if this developer's REAL Keychain
+    /// already has a real Nexus API key configured (via Settings) — the
+    /// expected state on a fresh checkout is no key at all, which prints
+    /// a clean SKIPPED rather than failing. Both calls are read-only GETs;
+    /// mod id 1030 is just a long-lived, stable Valheim mod on Nexus used
+    /// purely to exercise `modInfo`, with no other significance.
+    private static func checkNexusLiveAPI() async {
+        guard let realKey = Keychain.read(service: Keychain.nexusAPIKeyService) else {
+            print("  SKIPPED (no API key configured)")
+            return
+        }
+        let client = NexusClient()
+        do {
+            let validation = try await client.validateKey(realKey)
+            print("  validateKey() -> name=\(validation.name) isPremium=\(validation.isPremium) -> PASS")
+        } catch {
+            print("  validateKey() FAILED: \(error)")
+            return
+        }
+        do {
+            let info = try await client.modInfo(modId: 1030, key: realKey)
+            print("  modInfo(1030) -> name=\(info.name) version=\(info.version) author=\(info.author) -> PASS")
+        } catch {
+            print("  modInfo(1030) FAILED: \(error)")
         }
     }
 }

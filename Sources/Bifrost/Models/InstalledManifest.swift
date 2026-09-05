@@ -44,29 +44,46 @@ struct InstalledManifest: Codable, Sendable, Equatable {
         var files: [String]
         /// Where this mod came from: `"thunderstore"` for anything
         /// resolved/installed against the Thunderstore index (Browse tab,
-        /// dependency resolution, updates), or `"local"` for a mod
-        /// installed from a file on disk (see `ModManager.installFromFile`)
-        /// — local mods are excluded from update checks since there's no
-        /// index entry to compare against.
+        /// dependency resolution, updates), `"local"` for a mod installed
+        /// from a file on disk (see `ModManager.installFromFile`) — local
+        /// mods are excluded from update checks since there's no index
+        /// entry to compare against — or `"nexus"` for a mod installed via
+        /// the `nxm://` "Mod Manager Download" flow (see
+        /// `ModManager.installFromNexus`), whose update checks go against
+        /// Nexus's own API instead using `nexusModId` below.
         var source: String
+
+        /// The Nexus mod id this entry was installed from, when `source ==
+        /// "nexus"`. `nil` for every other source, and also `nil` for an
+        /// older nexus-sourced manifest entry written before this field
+        /// existed — `updatesAvailable` treats that the same as "can't
+        /// check" and skips it silently rather than erroring.
+        var nexusModId: Int?
+        /// The specific Nexus file id this entry's download came from
+        /// (a mod can have multiple files/versions) — recorded alongside
+        /// `nexusModId` for the same `source == "nexus"` entries.
+        var nexusFileId: Int?
 
         var id: String { fullName }
 
-        init(fullName: String, version: String, enabled: Bool, files: [String], source: String = "thunderstore") {
+        init(fullName: String, version: String, enabled: Bool, files: [String], source: String = "thunderstore", nexusModId: Int? = nil, nexusFileId: Int? = nil) {
             self.fullName = fullName
             self.version = version
             self.enabled = enabled
             self.files = files
             self.source = source
+            self.nexusModId = nexusModId
+            self.nexusFileId = nexusFileId
         }
 
         enum CodingKeys: String, CodingKey {
-            case fullName, version, enabled, files, source
+            case fullName, version, enabled, files, source, nexusModId, nexusFileId
         }
 
         /// Custom rather than synthesized so a manifest written before
-        /// `source` existed decodes with every mod defaulting to
-        /// `"thunderstore"` instead of failing to load entirely.
+        /// `source`/`nexusModId`/`nexusFileId` existed decodes with every
+        /// mod defaulting to `"thunderstore"` and `nil` respectively,
+        /// instead of failing to load entirely.
         init(from decoder: Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
             fullName = try container.decode(String.self, forKey: .fullName)
@@ -74,6 +91,8 @@ struct InstalledManifest: Codable, Sendable, Equatable {
             enabled = try container.decode(Bool.self, forKey: .enabled)
             files = try container.decode([String].self, forKey: .files)
             source = try container.decodeIfPresent(String.self, forKey: .source) ?? "thunderstore"
+            nexusModId = try container.decodeIfPresent(Int.self, forKey: .nexusModId)
+            nexusFileId = try container.decodeIfPresent(Int.self, forKey: .nexusFileId)
         }
     }
 }

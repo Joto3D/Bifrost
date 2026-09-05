@@ -90,6 +90,12 @@ actor ModManager {
 
     private let session: URLSession
     private let bepInExInstaller: BepInExInstaller
+    /// Used only for `updatesAvailable`'s `source == "nexus"` version
+    /// checks (`NexusClient.modInfo`) — the nxm install flow itself
+    /// (`installFromNexus`) resolves its own download URL upstream and
+    /// hands this actor a plain URL to download, same as any other
+    /// install.
+    private let nexusClient: NexusClient
     let manifestURL: URL
     /// Where the loader special case installs the launch wrapper + mode
     /// file. Defaults to the real Bifrost support directory; tests exercising
@@ -112,12 +118,14 @@ actor ModManager {
         session: URLSession = .shared,
         bepInExInstaller: BepInExInstaller = BepInExInstaller(),
         manifestURL: URL = ModManager.defaultManifestURL,
-        launchDir: URL = BepInExInstaller.defaultLaunchDir
+        launchDir: URL = BepInExInstaller.defaultLaunchDir,
+        nexusClient: NexusClient = NexusClient()
     ) {
         self.session = session
         self.bepInExInstaller = bepInExInstaller
         self.manifestURL = manifestURL
         self.launchDir = launchDir
+        self.nexusClient = nexusClient
     }
 
     static var defaultManifestURL: URL {
@@ -441,10 +449,17 @@ actor ModManager {
         return String(url.path.dropFirst(basePath.count))
     }
 
-    private func recordInstalledMod(fullName: String, version: String, files: [String], source: String = "thunderstore") throws {
+    private func recordInstalledMod(
+        fullName: String,
+        version: String,
+        files: [String],
+        source: String = "thunderstore",
+        nexusModId: Int? = nil,
+        nexusFileId: Int? = nil
+    ) throws {
         var manifest = loadManifest()
         manifest.mods.removeAll { $0.fullName == fullName }
-        manifest.mods.append(.init(fullName: fullName, version: version, enabled: true, files: files.sorted(), source: source))
+        manifest.mods.append(.init(fullName: fullName, version: version, enabled: true, files: files.sorted(), source: source, nexusModId: nexusModId, nexusFileId: nexusFileId))
         try save(manifest)
     }
 
@@ -511,6 +526,21 @@ actor ModManager {
         return (fullName, version)
     }
 
+    /// An explicit identity to record instead of `resolveLocalIdentity`'s
+    /// manifest.json-or-filename guessing — currently only used by the
+    /// Nexus `nxm://` flow (`installFromNexus`), which already knows its
+    /// mod's real name/author/version from Nexus's own API and has no use
+    /// for a payload's bundled `manifest.json` even when one happens to be
+    /// present. `nexusModId`/`nexusFileId` are recorded on the manifest
+    /// entry so `updatesAvailable` can check back with Nexus later.
+    struct IdentityOverride: Sendable {
+        let fullName: String
+        let version: String
+        let source: String
+        let nexusModId: Int?
+        let nexusFileId: Int?
+    }
+
     /// If `fullName` is already installed, either throws `.nameCollision`
     /// (the caller should offer the user a replace/skip choice) or, when
     /// `replaceExisting` is true, uninstalls the existing entry's files
@@ -548,13 +578,14 @@ actor ModManager {
         url: URL,
         gameDir: URL,
         replaceExisting: Bool = false,
+        identityOverride: IdentityOverride? = nil,
         onProgress: @Sendable (Progress) -> Void = { _ in }
     ) async throws -> String {
         switch url.pathExtension.lowercased() {
         case "zip":
-            return try await installZipFile(url: url, gameDir: gameDir, replaceExisting: replaceExisting, onProgress: onProgress)
+            return try await installZipFile(url: url, gameDir: gameDir, replaceExisting: replaceExisting, identityOverride: identityOverride, onProgress: onProgress)
         case "dll":
-            return try await installDLLFile(url: url, gameDir: gameDir, replaceExisting: replaceExisting, onProgress: onProgress)
+            return try await installDLLFile(url: url, gameDir: gameDir, replaceExisting: replaceExisting, identityOverride: identityOverride, onProgress: onProgress)
         default:
             throw ModManagerError.unsupportedFileType(url: url)
         }
@@ -564,10 +595,12 @@ actor ModManager {
         url: URL,
         gameDir: URL,
         replaceExisting: Bool,
+        identityOverride: IdentityOverride?,
         onProgress: @Sendable (Progress) -> Void
     ) async throws -> String {
         let fm = FileManager.default
-        let (fullName, version) = Self.resolveLocalIdentity(payloadRoot: nil, fallbackStem: url.deletingPathExtension().lastPathComponent)
+        let (fullName, version) = identityOverride.map { ($0.fullName, $0.version) }
+            ?? Self.resolveLocalIdentity(payloadRoot: nil, fallbackStem: url.deletingPathExtension().lastPathComponent)
 
         try prepareForInstall(fullName: fullName, gameDir: gameDir, replaceExisting: replaceExisting)
 
@@ -583,7 +616,14 @@ actor ModManager {
 
         _ = try? await ShellRunner.run("/usr/bin/xattr", ["-d", "com.apple.quarantine", destURL.path])
 
-        try recordInstalledMod(fullName: fullName, version: version, files: [relative], source: "local")
+        try recordInstalledMod(
+            fullName: fullName,
+            version: version,
+            files: [relative],
+            source: identityOverride?.source ?? "local",
+            nexusModId: identityOverride?.nexusModId,
+            nexusFileId: identityOverride?.nexusFileId
+        )
         onProgress(.done(fullName: fullName))
         return fullName
     }
@@ -592,6 +632,7 @@ actor ModManager {
         url: URL,
         gameDir: URL,
         replaceExisting: Bool,
+        identityOverride: IdentityOverride?,
         onProgress: @Sendable (Progress) -> Void
     ) async throws -> String {
         let fm = FileManager.default
@@ -610,7 +651,8 @@ actor ModManager {
         }
 
         let payloadRoot = try resolvePayloadRoot(extractDir: extractDir)
-        let (fullName, version) = Self.resolveLocalIdentity(payloadRoot: payloadRoot, fallbackStem: zipStem)
+        let (fullName, version) = identityOverride.map { ($0.fullName, $0.version) }
+            ?? Self.resolveLocalIdentity(payloadRoot: payloadRoot, fallbackStem: zipStem)
 
         try prepareForInstall(fullName: fullName, gameDir: gameDir, replaceExisting: replaceExisting)
 
@@ -622,9 +664,78 @@ actor ModManager {
             _ = try? await ShellRunner.run("/usr/bin/xattr", ["-d", "com.apple.quarantine", gameDir.appendingPathComponent(relativePath).path])
         }
 
-        try recordInstalledMod(fullName: fullName, version: version, files: writtenFiles, source: "local")
+        try recordInstalledMod(
+            fullName: fullName,
+            version: version,
+            files: writtenFiles,
+            source: identityOverride?.source ?? "local",
+            nexusModId: identityOverride?.nexusModId,
+            nexusFileId: identityOverride?.nexusFileId
+        )
         onProgress(.done(fullName: fullName))
         return fullName
+    }
+
+    // MARK: - Install from Nexus
+
+    /// Installs a mod fetched via the `nxm://` "Mod Manager Download"
+    /// flow: downloads `downloadURL` (a resolved Nexus CDN mirror — see
+    /// `NexusClient.downloadLink`) to a temp file, then feeds it through
+    /// the exact same `installFromFile` pipeline a local drag-and-drop zip
+    /// uses, with an `IdentityOverride` so the installed identity is
+    /// Nexus's own "<author>-<name>" (sanitized the same way
+    /// `resolveLocalIdentity` sanitizes a manifest.json's fields) and
+    /// version, rather than anything guessed from the downloaded archive
+    /// — recorded with `source: "nexus"` plus the mod/file ids so
+    /// `updatesAvailable` can check back with Nexus for a newer version
+    /// later.
+    ///
+    /// `author`/`name`/`version` come from `NexusClient.modInfo` (a file's
+    /// specific version when the caller has one more precise than the
+    /// mod's own `version`, otherwise the mod's version is fine — Nexus
+    /// exposes both).
+    @discardableResult
+    func installFromNexus(
+        downloadURL: URL,
+        gameDir: URL,
+        author: String,
+        name: String,
+        version: String,
+        nexusModId: Int,
+        nexusFileId: Int,
+        replaceExisting: Bool = false,
+        onProgress: @Sendable (Progress) -> Void = { _ in }
+    ) async throws -> String {
+        let fullName = "\(Self.sanitizeForFullName(author))-\(Self.sanitizeForFullName(name))"
+
+        onProgress(.downloading(fullName: fullName))
+        let (downloadedURL, response) = try await session.download(from: downloadURL)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            let status = (response as? HTTPURLResponse)?.statusCode ?? -1
+            throw ModManagerError.badDownloadResponse(status: status)
+        }
+
+        let fm = FileManager.default
+        let workDir = fm.temporaryDirectory.appendingPathComponent("Bifrost-NexusInstall-\(UUID().uuidString)")
+        try fm.createDirectory(at: workDir, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: workDir) }
+
+        // Nexus's CDN URLs carry the file's real name (with extension) in
+        // their path even though the query string is what actually
+        // authenticates the request, so this is safe unlike a fully
+        // opaque URL would be; fall back to .zip (essentially every
+        // Nexus Valheim mod file) if that's ever not true.
+        let ext = downloadURL.pathExtension.isEmpty ? "zip" : downloadURL.pathExtension
+        let stagedURL = workDir.appendingPathComponent("\(fullName).\(ext)")
+        try fm.moveItem(at: downloadedURL, to: stagedURL)
+
+        return try await installFromFile(
+            url: stagedURL,
+            gameDir: gameDir,
+            replaceExisting: replaceExisting,
+            identityOverride: IdentityOverride(fullName: fullName, version: version, source: "nexus", nexusModId: nexusModId, nexusFileId: nexusFileId),
+            onProgress: onProgress
+        )
     }
 
     // MARK: - Uninstall
@@ -704,18 +815,46 @@ actor ModManager {
 
     /// Compares every installed mod's recorded version against `index`'s
     /// current latest, returning one entry per mod that has a newer
-    /// version available. Mods installed from a local file (`source ==
-    /// "local"`) are never in the Thunderstore index under their derived
-    /// identity, so they're skipped outright rather than compared.
-    func updatesAvailable(index: [ThunderstorePackage]) -> [UpdateInfo] {
+    /// version available.
+    ///
+    /// Mods installed from a local file (`source == "local"`) are never in
+    /// the Thunderstore index under their derived identity, so they're
+    /// skipped outright rather than compared. `source == "nexus"` entries
+    /// are checked separately and live, against Nexus's own API
+    /// (`NexusClient.modInfo`) rather than `index` — only when both a
+    /// Keychain API key is configured *and* the entry carries a recorded
+    /// `nexusModId` (an older nexus-sourced manifest entry might not);
+    /// missing either skips that entry silently, same as a `local` mod,
+    /// rather than erroring the whole check. Thunderstore behavior is
+    /// otherwise unchanged.
+    func updatesAvailable(index: [ThunderstorePackage]) async -> [UpdateInfo] {
         let byFullName = Dictionary(uniqueKeysWithValues: index.map { ($0.fullName, $0) })
-        return loadManifest().mods.compactMap { mod in
-            guard mod.source != "local" else { return nil }
-            guard let latest = byFullName[mod.fullName]?.latestVersion, latest.versionNumber != mod.version else {
-                return nil
+
+        var results: [UpdateInfo] = []
+        for mod in loadManifest().mods {
+            if mod.source == "nexus" {
+                if let update = await nexusUpdateInfo(for: mod) {
+                    results.append(update)
+                }
+                continue
             }
-            return UpdateInfo(fullName: mod.fullName, installedVersion: mod.version, latestVersion: latest.versionNumber)
+            guard mod.source != "local" else { continue }
+            guard let latest = byFullName[mod.fullName]?.latestVersion, latest.versionNumber != mod.version else {
+                continue
+            }
+            results.append(UpdateInfo(fullName: mod.fullName, installedVersion: mod.version, latestVersion: latest.versionNumber))
         }
+        return results
+    }
+
+    private func nexusUpdateInfo(for mod: InstalledManifest.InstalledMod) async -> UpdateInfo? {
+        guard let modId = mod.nexusModId, let key = Keychain.read(service: Keychain.nexusAPIKeyService) else {
+            return nil
+        }
+        guard let info = try? await nexusClient.modInfo(modId: modId, key: key), info.version != mod.version else {
+            return nil
+        }
+        return UpdateInfo(fullName: mod.fullName, installedVersion: mod.version, latestVersion: info.version)
     }
 
     /// Uninstalls and reinstalls `fullName` at `index`'s current latest

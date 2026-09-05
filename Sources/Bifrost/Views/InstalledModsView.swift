@@ -434,6 +434,10 @@ private struct InstalledModRow: View {
                         Chip(text: "local", systemImage: "internaldrive")
                             .help("Installed from a local file — not checked against Thunderstore for updates")
                     }
+                    if mod.source == "nexus" {
+                        Chip(text: "nexus", systemImage: "link")
+                            .help("Installed from Nexus Mods — update checks compare against Nexus, not Thunderstore")
+                    }
                     if update != nil {
                         AuroraBadge(text: "Update", systemImage: "arrow.up.circle.fill")
                     }
