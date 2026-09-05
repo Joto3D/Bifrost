@@ -29,4 +29,13 @@ public sealed class AppSettings
 
     /// <summary>Show a Bifrost tray icon for quick Play/profile actions without opening the main window. Defaults to on.</summary>
     public bool ShowTrayIcon { get; set; } = true;
+
+    /// <summary>
+    /// Self-register as the handler for <c>nxm://</c> "Mod Manager Download"
+    /// links at startup (see <see cref="Services.NxmProtocolRegistrar"/>).
+    /// Windows-only in effect (a no-op on this Mac dev machine); defaults to
+    /// on, matching the macOS app's own always-registered <c>CFBundleURLTypes</c>
+    /// behavior.
+    /// </summary>
+    public bool EnableNxmProtocol { get; set; } = true;
 }

@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Bifrost.Core.Models;
@@ -75,6 +76,36 @@ public static class SelfTest
 
         Section(output, "App settings store (defaults, persistence, missing/corrupt file)");
         CheckAppSettingsStore(output);
+
+        Section(output, "Nexus Mods: nxm:// link parsing");
+        CheckNxmLinkParsing(output);
+
+        Section(output, "Nexus Mods: credential store round trip");
+        CheckWindowsCredentialsRoundTrip(output);
+
+        Section(output, "Nexus Mods: nxm:// protocol registration (Windows registry)");
+        CheckNxmProtocolRegistration(output);
+
+        Section(output, "Single-instance mutex + named-pipe forwarding");
+        await CheckSingleInstanceAsync(output);
+
+        Section(output, "Multiplayer safety: mod classifier");
+        CheckModClassifier(output);
+
+        Section(output, "Multiplayer safety: guided Join-a-Server planner");
+        CheckServerJoinPlanner(output);
+
+        Section(output, "Profile sharing: native format + r2modman interop");
+        await CheckProfileShareAsync(output);
+
+        Section(output, "Fun round: Saga stats");
+        CheckSagaStats(output);
+
+        Section(output, "Fun round: Flavor quips + Runestone tips");
+        CheckFlavorAndRunestoneTips(output);
+
+        Section(output, "Fun round: Surprise Me filter");
+        CheckSurpriseMe(output);
 
         output.WriteLine();
         output.WriteLine(_anyFailure ? "== One or more checks FAILED ==" : "== All checks PASSED ==");
@@ -430,7 +461,7 @@ public static class SelfTest
                 mod.Version = "0.0.1";
                 File.WriteAllText(fakeManifestPath, JsonSerializer.Serialize(manifest, BifrostJson.Options));
 
-                var updates = modManager.UpdatesAvailable(index);
+                var updates = await modManager.UpdatesAvailableAsync(index);
                 var flagged = updates.FirstOrDefault(u => u.FullName == "Advize-PlantEverything");
                 Report(output, "downgraded mod is flagged as updatable", flagged is not null && flagged.LatestVersion == realVersion);
 
@@ -987,7 +1018,7 @@ public static class SelfTest
     /// derived from it), a flat zip with a bare .dll at its root (identity
     /// derived from the file name), a bare standalone .dll, name-collision
     /// refusal vs. replaceExisting, and that a "local" source is excluded
-    /// from <see cref="ModManager.UpdatesAvailable"/>.
+    /// from <see cref="ModManager.UpdatesAvailableAsync"/>.
     /// </summary>
     private static async Task CheckInstallFromFileAsync(TextWriter output)
     {
@@ -1053,7 +1084,7 @@ public static class SelfTest
                     new() { VersionNumber = "9.9.9", DownloadUrl = "https://example.invalid/x.zip", Dependencies = new List<string>() },
                 },
             };
-            var updates = modManager.UpdatesAvailable(new List<ThunderstorePackage> { fakePackage });
+            var updates = await modManager.UpdatesAvailableAsync(new List<ThunderstorePackage> { fakePackage });
             Report(output, "local mod never flagged as updatable even though the index has a newer \"latest\" for the same FullName",
                 updates.All(u => u.FullName != expectedFullName));
 
@@ -1433,6 +1464,476 @@ public static class SelfTest
         {
             TryDeleteFile(fixturePath);
         }
+    }
+
+    // MARK: - Nexus Mods: nxm:// link parsing
+
+    private static void CheckNxmLinkParsing(TextWriter output)
+    {
+        var valid = NxmLink.Parse("nxm://valheim/mods/123/files/456?key=abc&expires=999");
+        Report(output, "valid nxm link parses gameDomain/modId/fileId/key/expires",
+            valid.GameDomain == "valheim" && valid.ModId == 123 && valid.FileId == 456 && valid.Key == "abc" && valid.Expires == "999");
+
+        var premiumStyle = NxmLink.Parse("nxm://valheim/mods/1/files/2");
+        Report(output, "a premium-account link (no key/expires) parses with both null", premiumStyle.Key is null && premiumStyle.Expires is null);
+
+        var wrongGameThrew = false;
+        try { NxmLink.Parse("nxm://skyrim/mods/1/files/2"); }
+        catch (NxmLink.ParseException.WrongGame ex) { wrongGameThrew = ex.Game == "skyrim"; }
+        Report(output, "a link for another game throws WrongGame(\"skyrim\")", wrongGameThrew);
+
+        var wrongSchemeThrew = false;
+        try { NxmLink.Parse("https://example.com/mods/1/files/2"); }
+        catch (NxmLink.ParseException.Malformed) { wrongSchemeThrew = true; }
+        Report(output, "a non-nxm scheme throws Malformed", wrongSchemeThrew);
+
+        var nonNumericIdThrew = false;
+        try { NxmLink.Parse("nxm://valheim/mods/abc/files/2"); }
+        catch (NxmLink.ParseException.Malformed) { nonNumericIdThrew = true; }
+        Report(output, "a non-numeric mod id throws Malformed", nonNumericIdThrew);
+    }
+
+    // MARK: - Nexus Mods: credential store
+
+    private static void CheckWindowsCredentialsRoundTrip(TextWriter output)
+    {
+        const string testTarget = "Bifrost-NexusAPIKey-check";
+        try
+        {
+            WindowsCredentials.Delete(testTarget); // clean slate, in case a previous run left something
+            var missing = WindowsCredentials.Read(testTarget);
+            Report(output, "reading a target that was never saved returns null", missing is null);
+
+            WindowsCredentials.Save("test-key-12345", testTarget);
+            var read = WindowsCredentials.Read(testTarget);
+            Report(output, "save then read round-trips the value", read == "test-key-12345");
+
+            WindowsCredentials.Save("replacement-key", testTarget);
+            var replaced = WindowsCredentials.Read(testTarget);
+            Report(output, "saving again upserts rather than erroring", replaced == "replacement-key");
+
+            var deleted = WindowsCredentials.Delete(testTarget);
+            var afterDelete = WindowsCredentials.Read(testTarget);
+            Report(output, "delete removes it, and reading afterward returns null", deleted && afterDelete is null);
+            Report(output, "deleting an already-absent target still reports success", WindowsCredentials.Delete(testTarget));
+
+            output.WriteLine(OperatingSystem.IsWindows()
+                ? "  (ran against the real Windows Credential Manager)"
+                : "  (ran against the dev-only plaintext fallback store — this Mac has no Credential Manager; never used on a real Windows install)");
+        }
+        finally
+        {
+            WindowsCredentials.Delete(testTarget);
+        }
+    }
+
+    // MARK: - Nexus Mods: nxm:// protocol registration
+
+    private static void CheckNxmProtocolRegistration(TextWriter output)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            output.WriteLine("SKIPPED: nxm:// registry protocol registration (HKCU\\Software\\Classes\\nxm) is Windows-only — needs a real Windows box to verify.");
+            return;
+        }
+
+        // Real registry writes, but under a fake exe path this developer's
+        // real Nexus links will never point at.
+        const string fakeExePath = @"C:\Fake\BifrostCheck\Bifrost.exe";
+        try
+        {
+            NxmProtocolRegistrar.Register(fakeExePath);
+            Report(output, "Register() then IsRegisteredTo(same path) reports true", NxmProtocolRegistrar.IsRegisteredTo(fakeExePath));
+            Report(output, "IsRegisteredTo(a different path) reports false", !NxmProtocolRegistrar.IsRegisteredTo(@"C:\Different\Bifrost.exe"));
+        }
+        finally
+        {
+            NxmProtocolRegistrar.Unregister();
+        }
+        Report(output, "Unregister() then IsRegisteredTo() reports false", !NxmProtocolRegistrar.IsRegisteredTo(fakeExePath));
+    }
+
+    // MARK: - Single-instance mutex + named-pipe forwarding
+
+    /// <summary>
+    /// Exercises <see cref="SingleInstance"/> for real: both the named
+    /// mutex and named pipe it uses are supported cross-platform by .NET
+    /// (Unix included), so unlike the registry-based protocol registration
+    /// above, this isn't Windows-only and runs for real on this Mac —
+    /// using throwaway mutex/pipe names so it never collides with a real
+    /// running Bifrost instance.
+    /// </summary>
+    private static async Task CheckSingleInstanceAsync(TextWriter output)
+    {
+        var suffix = Guid.NewGuid().ToString("N")[..8];
+        var mutexName = $"BifrostCheck-SingleInstance-{suffix}";
+        // Kept short — see the length caveat on SingleInstance's pipeName parameter.
+        var pipeName = $"BCk-{suffix}";
+
+        using var primary = new SingleInstance(mutexName, pipeName);
+        var becamePrimary = primary.AcquirePrimary();
+        Report(output, "the first instance acquires primary", becamePrimary);
+
+        using var secondary = new SingleInstance(mutexName, pipeName);
+        var secondaryBecamePrimary = secondary.AcquirePrimary();
+        Report(output, "a second instance (same mutex name) is refused primary", !secondaryBecamePrimary);
+
+        string? received = null;
+        var tcs = new TaskCompletionSource();
+        primary.StartListening(message =>
+        {
+            received = message;
+            tcs.TrySetResult();
+        });
+        await Task.Delay(150); // let the named-pipe server start accepting connections
+
+        var forwarded = SingleInstance.TryForward("nxm://valheim/mods/1/files/2", pipeName, timeoutMs: 2000);
+        var delivered = await Task.WhenAny(tcs.Task, Task.Delay(3000)) == tcs.Task;
+
+        Report(output, "a forwarded nxm:// message reaches the primary's listener",
+            forwarded && delivered && received == "nxm://valheim/mods/1/files/2",
+            $"forwarded={forwarded} delivered={delivered} received={received}");
+    }
+
+    // MARK: - Multiplayer safety: mod classifier
+
+    private static void CheckModClassifier(TextWriter output)
+    {
+        var curated = ModClassifier.Classify("ValheimModding-Jotunn", package: null);
+        Report(output, "curated override wins regardless of package data: ValheimModding-Jotunn -> ServerSynced",
+            curated.ModClass == ModClass.ServerSynced && curated.Basis == "curated");
+
+        var byCategory = ModClassifier.Classify("Some-UncuratedMod", new ThunderstorePackage { FullName = "Some-UncuratedMod", Categories = new List<string> { "World Generation" } });
+        Report(output, "category signal: \"World Generation\" -> WorldAltering",
+            byCategory.ModClass == ModClass.WorldAltering && byCategory.Basis.StartsWith("category:", StringComparison.Ordinal));
+
+        var byHeuristic = ModClassifier.Classify("Some-TextureThing", package: null);
+        Report(output, "heuristic signal: full name contains \"texture\" -> ClientOnly",
+            byHeuristic.ModClass == ModClass.ClientOnly && byHeuristic.Basis.Contains("texture", StringComparison.Ordinal));
+
+        var unknown = ModClassifier.Classify("Nobody-Knows-This-One", package: null);
+        Report(output, "no curated/category/heuristic signal -> Unknown, basis \"no signal\"",
+            unknown.ModClass == ModClass.Unknown && unknown.Basis == "no signal");
+
+        // Informational: classify whatever's in this machine's real
+        // manifest.json (read-only) so a developer can eyeball the
+        // classifier against real installed mods, same spirit as the
+        // manifest-shape-compatibility check above.
+        var realManifest = new ModManager(manifestPath: BifrostPaths.ManifestPath).LoadManifest();
+        if (realManifest.Mods.Count == 0)
+        {
+            output.WriteLine("  (no real manifest.json on this machine — nothing to list)");
+        }
+        else
+        {
+            output.WriteLine($"  classifying {realManifest.Mods.Count} real installed mod(s) (informational only):");
+            foreach (var mod in realManifest.Mods)
+            {
+                var classification = ModClassifier.Classify(mod.FullName, package: null);
+                output.WriteLine($"    {classification.ModClass.Glyph()} {mod.FullName}: {classification.ModClass} ({classification.Basis})");
+            }
+        }
+    }
+
+    // MARK: - Multiplayer safety: guided Join-a-Server planner
+
+    private static void CheckServerJoinPlanner(TextWriter output)
+    {
+        var fakeSaveDir = Path.Combine(Path.GetTempPath(), $"BifrostCheck-serverjoin-savedir-{Guid.NewGuid()}");
+        var fakeBackupsDir = Path.Combine(Path.GetTempPath(), $"BifrostCheck-serverjoin-backupsdir-{Guid.NewGuid()}");
+        var fakeGameDir = Path.Combine(Path.GetTempPath(), $"BifrostCheck-serverjoin-game-{Guid.NewGuid()}");
+        var fakeManifestPath = Path.Combine(Path.GetTempPath(), $"BifrostCheck-serverjoin-manifest-{Guid.NewGuid()}.json");
+        var fakeProfilesPath = Path.Combine(Path.GetTempPath(), $"BifrostCheck-serverjoin-profiles-{Guid.NewGuid()}.json");
+        try
+        {
+            var fixtureManifest = new InstalledManifest
+            {
+                Mods =
+                {
+                    new InstalledManifest.InstalledMod { FullName = "Azumatt-FirstPersonMode", Version = "1.0.0", Enabled = true, Files = { "BepInEx/plugins/Azumatt-FirstPersonMode/A.dll" } },
+                    new InstalledManifest.InstalledMod { FullName = "RandyKnapp-EquipmentAndQuickSlots", Version = "1.0.0", Enabled = true, Files = { "BepInEx/plugins/RandyKnapp-EquipmentAndQuickSlots/B.dll" } },
+                    new InstalledManifest.InstalledMod { FullName = "Soloredis-RtDBiomes", Version = "1.0.0", Enabled = true, Files = { "BepInEx/plugins/Soloredis-RtDBiomes/C.dll" } },
+                    new InstalledManifest.InstalledMod { FullName = "Mystery-UnknownMod", Version = "1.0.0", Enabled = true, Files = { "BepInEx/plugins/Mystery-UnknownMod/D.dll" } },
+                },
+            };
+            foreach (var mod in fixtureManifest.Mods)
+            {
+                foreach (var relativePath in mod.Files)
+                {
+                    var path = Path.Combine(fakeGameDir, relativePath.Replace('/', Path.DirectorySeparatorChar));
+                    Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                    File.WriteAllText(path, "dummy");
+                }
+            }
+            Directory.CreateDirectory(Path.GetDirectoryName(fakeManifestPath)!);
+            File.WriteAllText(fakeManifestPath, JsonSerializer.Serialize(fixtureManifest, BifrostJson.Options));
+
+            var modManager = new ModManager(manifestPath: fakeManifestPath);
+            var plan = ServerJoinPlanner.BuildPlan(fixtureManifest, new List<ThunderstorePackage>());
+
+            var groupingOk = plan.KeepEnabled.Any(i => i.FullName == "Azumatt-FirstPersonMode" && i.Enabled)
+                && plan.AddsItemsWarning.Any(i => i.FullName == "RandyKnapp-EquipmentAndQuickSlots" && i.Enabled)
+                && plan.Disable.Any(i => i.FullName == "Soloredis-RtDBiomes" && !i.Enabled)
+                && plan.Disable.Any(i => i.FullName == "Mystery-UnknownMod" && !i.Enabled);
+            Report(output, "BuildPlan groups by class with the documented per-group defaults (keep/warn-but-keep/disable)", groupingOk);
+
+            var overridden = ServerJoinPlanner.BuildPlan(fixtureManifest, new List<ThunderstorePackage>(),
+                new Dictionary<string, bool> { ["Soloredis-RtDBiomes"] = true, ["RandyKnapp-EquipmentAndQuickSlots"] = false });
+            var overrideOk = overridden.Disable.First(i => i.FullName == "Soloredis-RtDBiomes").Enabled
+                && !overridden.AddsItemsWarning.First(i => i.FullName == "RandyKnapp-EquipmentAndQuickSlots").Enabled;
+            Report(output, "per-mod overrides flip a group's default", overrideOk);
+
+            var worldFile = Path.Combine(fakeSaveDir, "worlds_local", "TestWorld.db");
+            Directory.CreateDirectory(Path.GetDirectoryName(worldFile)!);
+            File.WriteAllText(worldFile, "world-data");
+            var saveBackup = new SaveBackup(fakeSaveDir, fakeBackupsDir);
+            var profileStore = new ProfileStore(modManager, fakeProfilesPath);
+            var targetProfile = profileStore.Create("Server Guest Fixture", new List<Profile.ProfileMod>());
+
+            var outcome = ServerJoinPlanner.Apply(plan, targetProfile.Id, fakeGameDir, profileStore, saveBackup);
+
+            var backupCreated = outcome.BackupOutcome is SaveBackup.BackupOutcome.Created;
+            var savedProfile = profileStore.Load().Profiles.First(p => p.Id == targetProfile.Id);
+            var isGuestOk = savedProfile.IsServerGuest == true;
+            var modsWrittenOk = savedProfile.Mods.Count == fixtureManifest.Mods.Count;
+
+            var manifestAfter = modManager.LoadManifest();
+            var clientOnlyEnabled = manifestAfter.Mods.First(m => m.FullName == "Azumatt-FirstPersonMode").Enabled;
+            var worldAlteringDisabled = !manifestAfter.Mods.First(m => m.FullName == "Soloredis-RtDBiomes").Enabled;
+
+            Report(output, "Apply(): takes a pre-server backup first, marks the profile a guest with the plan's mods, and reconciles the real install",
+                backupCreated && isGuestOk && modsWrittenOk && clientOnlyEnabled && worldAlteringDisabled,
+                $"backup={outcome.BackupOutcome.GetType().Name} isGuest={savedProfile.IsServerGuest} mods={savedProfile.Mods.Count} clientOnlyEnabled={clientOnlyEnabled} worldAlteringDisabled={worldAlteringDisabled}");
+        }
+        finally
+        {
+            TryDelete(fakeSaveDir);
+            TryDelete(fakeBackupsDir);
+            TryDelete(fakeGameDir);
+            TryDeleteFile(fakeManifestPath);
+            TryDeleteFile(fakeProfilesPath);
+        }
+    }
+
+    // MARK: - Profile sharing
+
+    private static async Task CheckProfileShareAsync(TextWriter output)
+    {
+        var manifest = new InstalledManifest
+        {
+            Mods =
+            {
+                new InstalledManifest.InstalledMod { FullName = "Fixture-ModA", Version = "1.0.0", Enabled = true, Source = "thunderstore", Files = { "BepInEx/plugins/Fixture-ModA/A.dll" } },
+                new InstalledManifest.InstalledMod { FullName = "Fixture-LocalOnly", Version = "0.0.0-local", Enabled = true, Source = "local", Files = { "BepInEx/plugins/Fixture-LocalOnly/L.dll" } },
+                new InstalledManifest.InstalledMod { FullName = "Fixture-NexusMod", Version = "2.0.0", Enabled = false, Source = "nexus", NexusModId = 42, Files = { "BepInEx/plugins/Fixture-NexusMod/N.dll" } },
+            },
+        };
+        var profile = new Profile
+        {
+            Id = Guid.NewGuid(),
+            Name = "Fixture Profile",
+            Mods =
+            {
+                new Profile.ProfileMod { FullName = "Fixture-ModA", Enabled = true },
+                new Profile.ProfileMod { FullName = "Fixture-LocalOnly", Enabled = true },
+                new Profile.ProfileMod { FullName = "Fixture-NexusMod", Enabled = false },
+            },
+        };
+
+        var outcome = ProfileShare.Export(profile, manifest);
+        Report(output, "export skips source==\"local\" mods and reports them separately", outcome.SkippedLocalMods.SequenceEqual(new[] { "Fixture-LocalOnly" }));
+        Report(output, "export keeps thunderstore + nexus mods, marking the nexus source/id",
+            outcome.Json.Mods.Count == 2
+            && outcome.Json.Mods.Any(m => m.FullName == "Fixture-ModA" && m.Source is null)
+            && outcome.Json.Mods.Any(m => m.FullName == "Fixture-NexusMod" && m.Source == "nexus" && m.NexusModId == 42));
+
+        var fakeIndex = new List<ThunderstorePackage>
+        {
+            new()
+            {
+                FullName = "Fixture-ModA", Name = "Mod A", Owner = "Fixture",
+                Versions = new List<ThunderstorePackage.Version> { new() { VersionNumber = "1.5.0", DownloadUrl = "https://example.invalid/a.zip" } },
+            },
+        };
+        var recipientManifest = InstalledManifest.Empty;
+        var plan = ProfileShare.Plan(outcome.EncodedString, fakeIndex, recipientManifest);
+        var resolvableOk = plan.Resolvable.Any(m => m.FullName == "Fixture-ModA" && m.RequestedVersion == "1.0.0" && m.ResolvedVersion == "1.5.0" && m.WasSubstituted);
+        var nexusUnresolvableOk = plan.Unresolvable.Any(m => m.FullName == "Fixture-NexusMod" && m.Reason is ProfileShare.ImportPlan.UnresolvableReason.NexusOnly { ModId: 42 });
+        Report(output, "native round trip: the exported code re-plans with a substituted version and a Nexus-marked unresolvable entry",
+            resolvableOk && nexusUnresolvableOk,
+            $"resolvable=[{string.Join(",", plan.Resolvable.Select(m => m.FullName))}] unresolvable=[{string.Join(",", plan.Unresolvable.Select(m => m.FullName))}]");
+
+        var fileFixturePath = Path.Combine(Path.GetTempPath(), $"BifrostCheck-profileshare-{Guid.NewGuid()}.bifrostprofile");
+        try
+        {
+            var skipped = ProfileShare.ExportFile(profile, manifest, fileFixturePath);
+            var planFromFile = ProfileShare.PlanFromFile(fileFixturePath, fakeIndex, recipientManifest);
+            Report(output, ".bifrostprofile file round trip resolves the same as the base64 code",
+                skipped.SequenceEqual(new[] { "Fixture-LocalOnly" })
+                && planFromFile.Resolvable.Count == plan.Resolvable.Count
+                && planFromFile.Unresolvable.Count == plan.Unresolvable.Count);
+        }
+        finally
+        {
+            TryDeleteFile(fileFixturePath);
+        }
+
+        var futureFormatJson = JsonSerializer.Serialize(new { bifrost = 99, name = "x", mods = Array.Empty<object>() });
+        var unsupportedVersionThrew = false;
+        try { ProfileShare.Plan(Convert.ToBase64String(Encoding.UTF8.GetBytes(futureFormatJson)), fakeIndex, recipientManifest); }
+        catch (ProfileShare.ProfileShareException.UnsupportedVersion) { unsupportedVersionThrew = true; }
+        Report(output, "a share from a newer format version throws UnsupportedVersion rather than misreading it", unsupportedVersionThrew);
+
+        Report(output, "LooksLikeR2ModManCode: a bare UUID is true, a Bifrost base64 code is false",
+            ProfileShare.LooksLikeR2ModManCode(Guid.NewGuid().ToString()) && !ProfileShare.LooksLikeR2ModManCode(outcome.EncodedString));
+
+        try
+        {
+            var r2Manifest = new InstalledManifest
+            {
+                Mods = { new InstalledManifest.InstalledMod { FullName = "Fixture-ModA", Version = "1.0.0", Enabled = true, Source = "thunderstore", Files = { "BepInEx/plugins/Fixture-ModA/A.dll" } } },
+            };
+            var r2Profile = new Profile { Id = Guid.NewGuid(), Name = "R2 Fixture", Mods = { new Profile.ProfileMod { FullName = "Fixture-ModA", Enabled = true } } };
+
+            var code = await ProfileShare.ExportR2CodeAsync(r2Profile, r2Manifest);
+            Report(output, "LIVE r2modman export: uploaded to Thunderstore's legacyprofile/create/ and returned a bare-UUID code", Guid.TryParse(code, out _), code);
+
+            var r2Plan = await ProfileShare.ImportR2CodeAsync(code, fakeIndex, recipientManifest);
+            Report(output, "LIVE r2modman round trip: re-fetching the code resolves \"Fixture-ModA\" again",
+                r2Plan.Resolvable.Any(m => m.FullName == "Fixture-ModA") || r2Plan.AlreadyInstalled.Any(m => m.FullName == "Fixture-ModA"),
+                $"importedName={r2Plan.ImportedName}");
+        }
+        catch (Exception ex)
+        {
+            output.WriteLine($"SKIPPED live r2modman round trip: {ex.Message} (likely offline)");
+        }
+    }
+
+    // MARK: - Fun round: Saga stats
+
+    private static void CheckSagaStats(TextWriter output)
+    {
+        var fakeSaveDir = Path.Combine(Path.GetTempPath(), $"BifrostCheck-sagastats-savedir-{Guid.NewGuid()}");
+        try
+        {
+            const string localConfigFixture = """
+                "UserLocalConfigStore"
+                {
+                	"Software"
+                	{
+                		"Valve"
+                		{
+                			"Steam"
+                			{
+                				"apps"
+                				{
+                					"892970"
+                					{
+                						"Playtime"		"125"
+                					}
+                				}
+                			}
+                		}
+                	}
+                }
+                """;
+            var playtime = SagaStats.PlaytimeMinutes(localConfigFixture);
+            Report(output, "PlaytimeMinutes reads the nested apps/892970/Playtime value", playtime == 125);
+            Report(output, "PlaytimeMinutes(null) is null", SagaStats.PlaytimeMinutes(null) is null);
+
+            var worldDb = Path.Combine(fakeSaveDir, "worlds_local", "MyWorld.db");
+            var worldFwl = Path.Combine(fakeSaveDir, "worlds_local", "MyWorld.fwl");
+            var characterFch = Path.Combine(fakeSaveDir, "characters_local", "Hero.fch");
+            foreach (var path in new[] { worldDb, worldFwl, characterFch })
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            }
+            File.WriteAllText(worldDb, "12345");
+            File.WriteAllText(worldFwl, "12");
+            File.WriteAllText(characterFch, "123");
+
+            var worlds = SagaStats.WorldEntries(fakeSaveDir);
+            var characters = SagaStats.CharacterEntries(fakeSaveDir);
+            Report(output, "worlds_local groups .db+.fwl by stem into one SaveEntry with summed size",
+                worlds.Count == 1 && worlds[0].Name == "MyWorld" && worlds[0].ByteSize == 5 + 2);
+            Report(output, "characters_local: one .fch file -> one SaveEntry", characters.Count == 1 && characters[0].Name == "Hero" && characters[0].ByteSize == 3);
+
+            var fixtureManifest = new InstalledManifest
+            {
+                Mods =
+                {
+                    new InstalledManifest.InstalledMod { FullName = "Azumatt-FirstPersonMode", Version = "1.0.0", Enabled = true },
+                    new InstalledManifest.InstalledMod { FullName = "ValheimModding-Jotunn", Version = "1.0.0", Enabled = true },
+                },
+            };
+            var breakdown = SagaStats.ClassBreakdown(fixtureManifest, new List<ThunderstorePackage>());
+            Report(output, "ClassBreakdown tallies curated classes in ModClass declaration order, skipping empty classes",
+                breakdown.Select(c => c.ModClass).SequenceEqual(new[] { ModClass.ClientOnly, ModClass.ServerSynced }) && breakdown.All(c => c.Count == 1));
+
+            var backups = new List<SaveBackup.Backup> { new("/fake/backup.zip", DateTime.UtcNow, "manual", 2_500_000) };
+            var snapshot = SagaStats.BuildSnapshot(fixtureManifest, new List<ThunderstorePackage>(), backups, fakeSaveDir, localConfigFixture);
+            var lines = SagaStats.FlavorLines(snapshot);
+            Report(output, "FlavorLines: playtime/worlds/characters/mods/backups lines all present with correct counts",
+                lines.Any(l => l.Contains("2 hour", StringComparison.Ordinal)) // 125 min -> 2 hours
+                && lines.Any(l => l.Contains("1 world", StringComparison.Ordinal))
+                && lines.Any(l => l.Contains("1 hero", StringComparison.Ordinal))
+                && lines.Any(l => l.Contains("2 mods", StringComparison.Ordinal))
+                && lines.Any(l => l.Contains("1 backup", StringComparison.Ordinal)),
+                string.Join(" | ", lines));
+
+            var emptyLines = SagaStats.FlavorLines(SagaStats.Snapshot.Empty);
+            Report(output, "an entirely empty snapshot falls back to exactly one line", emptyLines.Count == 1 && emptyLines[0].Contains("No saga recorded", StringComparison.Ordinal));
+        }
+        finally
+        {
+            TryDelete(fakeSaveDir);
+        }
+    }
+
+    // MARK: - Fun round: Flavor quips + Runestone tips
+
+    private static void CheckFlavorAndRunestoneTips(TextWriter output)
+    {
+        Report(output, "Flavor.Quips: 25 unique entries", Flavor.Quips.Count == 25 && Flavor.Quips.Distinct().Count() == 25);
+
+        var quipA = Flavor.Quip(42);
+        var quipB = Flavor.Quip(42);
+        Report(output, "Flavor.Quip(seed) is deterministic for the same seed and always picks from Quips", quipA == quipB && Flavor.Quips.Contains(quipA));
+
+        Report(output, "RunestoneTips.All: 25 unique entries, 15 tips followed by 10 lore lines",
+            RunestoneTips.All.Count == 25
+            && RunestoneTips.All.Select(t => t.Text).Distinct().Count() == 25
+            && RunestoneTips.All.Take(15).All(t => !t.IsLore)
+            && RunestoneTips.All.Skip(15).All(t => t.IsLore));
+
+        var next = RunestoneTips.NextIndex(0);
+        Report(output, "RunestoneTips.NextIndex always differs from the current index", next != 0);
+    }
+
+    // MARK: - Fun round: Surprise Me
+
+    private static void CheckSurpriseMe(TextWriter output)
+    {
+        var installedManifest = new InstalledManifest { Mods = { new InstalledManifest.InstalledMod { FullName = "Already-Installed", Version = "1.0.0", Enabled = true } } };
+        var index = new List<ThunderstorePackage>
+        {
+            new() { FullName = "Good-HighRating", RatingScore = 50, IsDeprecated = false },
+            new() { FullName = "Bad-LowRating", RatingScore = 19, IsDeprecated = false },
+            new() { FullName = "Bad-Deprecated", RatingScore = 100, IsDeprecated = true },
+            new() { FullName = "Already-Installed", RatingScore = 100, IsDeprecated = false },
+            new() { FullName = ModManager.LoaderFullName, RatingScore = 100, IsDeprecated = false },
+            new() { FullName = "Boundary-ExactlyMinimum", RatingScore = SurpriseMe.MinimumRating, IsDeprecated = false },
+        };
+
+        var eligible = SurpriseMe.Eligible(index, installedManifest);
+        Report(output, "Eligible excludes low rating, deprecated, the loader pack, and already-installed; keeps the exact-minimum-rating boundary",
+            eligible.Select(p => p.FullName).OrderBy(n => n, StringComparer.Ordinal).SequenceEqual(new[] { "Boundary-ExactlyMinimum", "Good-HighRating" }));
+
+        var pick = SurpriseMe.Pick(index, installedManifest);
+        Report(output, "Pick returns one of the eligible packages", pick is not null && eligible.Contains(pick));
+
+        var emptyPick = SurpriseMe.Pick(new List<ThunderstorePackage>(), installedManifest);
+        Report(output, "Pick against an empty index returns null rather than throwing", emptyPick is null);
     }
 
     // MARK: - Helpers

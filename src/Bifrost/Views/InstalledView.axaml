@@ -51,6 +51,17 @@
                                                 IsVisible="{Binding UpdateAvailable}">
                                             <TextBlock Text="Update" FontSize="10" FontWeight="SemiBold" Foreground="White" />
                                         </Border>
+                                        <Border Background="{DynamicResource BifrostBadgeTintSoftBrush}" CornerRadius="999" Padding="6,1"
+                                                IsVisible="{Binding SourceChipText, Converter={x:Static ObjectConverters.IsNotNull}}">
+                                            <TextBlock Text="{Binding SourceChipText}" FontSize="10" Foreground="{DynamicResource BifrostSecondaryAccentBrush}" />
+                                        </Border>
+                                        <Border Background="{Binding ClassBadgeBrush}" CornerRadius="999" Padding="6,1"
+                                                ToolTip.Tip="{Binding ClassBadgeTooltip}">
+                                            <StackPanel Orientation="Horizontal" Spacing="3">
+                                                <TextBlock Text="{Binding ClassBadgeGlyph}" FontSize="9" VerticalAlignment="Center" />
+                                                <TextBlock Text="{Binding ClassBadgeLabel}" FontSize="10" Foreground="{Binding ClassBadgeTextBrush}" VerticalAlignment="Center" />
+                                            </StackPanel>
+                                        </Border>
                                     </StackPanel>
                                     <TextBlock Text="{Binding LatestVersion, StringFormat='-> {0} available'}"
                                                IsVisible="{Binding UpdateAvailable}" Opacity="0.6" FontSize="11" />

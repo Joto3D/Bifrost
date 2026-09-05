@@ -20,6 +20,21 @@ public sealed class Profile
     public string Name { get; set; } = string.Empty;
     public List<ProfileMod> Mods { get; set; } = new();
 
+    /// <summary>
+    /// Marks this profile as a temporary "join a server" profile created by
+    /// the guided flow (<see cref="Services.ServerJoinPlanner"/>) — drives
+    /// the "Back to my profile" hint on Home. Nullable rather than a plain
+    /// bool so a profiles.json written before this field existed still
+    /// deserializes with it simply missing (System.Text.Json leaves an
+    /// absent nullable property at its default, null, rather than failing);
+    /// null and false are equivalent everywhere this is read (see
+    /// <see cref="IsGuestProfile"/>).
+    /// </summary>
+    public bool? IsServerGuest { get; set; }
+
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool IsGuestProfile => IsServerGuest == true;
+
     /// <summary>One mod's desired membership in a profile.</summary>
     public sealed class ProfileMod : IEquatable<ProfileMod>
     {

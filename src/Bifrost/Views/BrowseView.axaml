@@ -13,6 +13,10 @@
             <TextBox Text="{Binding SearchText}" PlaceholderText="Search name, owner, description..." Width="320" />
             <ComboBox ItemsSource="{Binding SortOrders}" SelectedItem="{Binding SortOrder}" Width="160" />
             <Button Content="Refresh" Command="{Binding LoadCommand}" />
+            <Button Click="OnSurpriseMeClick" ToolTip.Tip="Surprise me — open a random well-rated mod"
+                    Padding="8,4" VerticalAlignment="Center">
+                <TextBlock Text="&#x1F3B2;" FontSize="16" Foreground="{Binding DiceForeground}" RenderTransform="{Binding DiceTransform}" />
+            </Button>
             <ProgressBar IsIndeterminate="True" Width="80" IsVisible="{Binding IsLoading}" VerticalAlignment="Center" />
         </StackPanel>
 

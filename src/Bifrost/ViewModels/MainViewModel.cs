@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using Bifrost.Core.Models;
 using Bifrost.Core.Services;
 using Bifrost.Services;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -45,6 +46,18 @@ public partial class MainViewModel : ViewModelBase
 
     public bool ShowGameUpdateBanner => GameUpdateCheck?.Kind == GameUpdateWatcher.ResultKind.Updated && !GameUpdateBannerDismissed;
     public string GameUpdateMessage => GameUpdateCheck?.Message ?? "";
+
+    /// <summary>
+    /// Drives a small non-blocking status banner while an <c>nxm://</c>
+    /// install (see <see cref="HandleNexusLinkAsync"/>) is in flight — the
+    /// Windows counterpart of the macOS app's <c>NexusInstallState</c>/the
+    /// small in-window progress pill <c>MainWindow.swift</c> shows.
+    /// </summary>
+    [ObservableProperty]
+    private bool _isInstallingFromNexus;
+
+    [ObservableProperty]
+    private string? _nexusInstallStatusLine;
 
     public MainViewModel()
     {
@@ -159,4 +172,81 @@ public partial class MainViewModel : ViewModelBase
         }
         await Installed.CheckForUpdatesAsync();
     }
+
+    /// <summary>
+    /// Handles an <c>nxm://</c> "Mod Manager Download" link — the sole
+    /// caller is <c>App.axaml.cs</c>, either for this process's own initial
+    /// launch argument or for one forwarded over the single-instance pipe
+    /// from a second Bifrost.exe a later Nexus click spawned (see
+    /// <see cref="SingleInstance"/>). Parses it, requires both a located
+    /// game dir and a saved Nexus API key (surfacing a friendly status line
+    /// and bailing out otherwise — no silent failures), fetches the mod's
+    /// display metadata, resolves the CDN download link (passing the nxm
+    /// link's own key/expires through for a free-account "Slow download"),
+    /// and installs it via <see cref="ModManager.InstallFromNexusAsync"/>.
+    /// Refreshes Home/Installed on success, same as every other install
+    /// path. Mirrors the macOS app's <c>AppState.handleNexusLink</c>.
+    /// </summary>
+    public async Task HandleNexusLinkAsync(string rawUrl)
+    {
+        NxmLink link;
+        try
+        {
+            link = NxmLink.Parse(rawUrl);
+        }
+        catch (Exception ex)
+        {
+            NexusInstallStatusLine = $"Nexus Mods link: {ex.Message}";
+            return;
+        }
+
+        var gameDir = _services.LocateGameDir();
+        if (gameDir is null)
+        {
+            NexusInstallStatusLine = "Locate the Valheim game folder (Settings) before installing from Nexus.";
+            return;
+        }
+        var apiKey = WindowsCredentials.Read(WindowsCredentials.NexusApiKeyTarget);
+        if (apiKey is null)
+        {
+            NexusInstallStatusLine = "Add your Nexus API key in Settings → Nexus Mods before installing from Nexus.";
+            return;
+        }
+
+        IsInstallingFromNexus = true;
+        NexusInstallStatusLine = "Fetching mod info…";
+        try
+        {
+            var nexusClient = new NexusClient();
+            var info = await nexusClient.ModInfoAsync(link.ModId, apiKey);
+
+            NexusInstallStatusLine = $"Resolving download for {info.Name}…";
+            var downloadUrl = await nexusClient.DownloadLinkAsync(link.ModId, link.FileId, apiKey, link.Key, link.Expires);
+
+            NexusInstallStatusLine = $"Installing {info.Name}…";
+            // Always replace rather than surfacing a collision dialog: the
+            // derived identity ("<author>-<name>") is deterministic, so a
+            // repeat nxm install of the same mod (e.g. clicking "Mod
+            // Manager Download" again for a newer file) is unambiguously
+            // meant to update it, not to prompt.
+            await Task.Run(() => _services.ModManager.InstallFromNexusAsync(
+                downloadUrl, gameDir, info.Author, info.Name, info.Version, link.ModId, link.FileId, replaceExisting: true));
+
+            await Task.Run(() => _services.ProfileStore.SyncActiveProfile());
+            await Home.RefreshCommand.ExecuteAsync(null);
+            await Installed.RefreshAsync();
+            NexusInstallStatusLine = $"Installed {info.Name} from Nexus Mods.";
+        }
+        catch (Exception ex)
+        {
+            NexusInstallStatusLine = $"Nexus install failed: {ex.Message}";
+        }
+        finally
+        {
+            IsInstallingFromNexus = false;
+        }
+    }
+
+    [RelayCommand]
+    private void DismissNexusInstallStatus() => NexusInstallStatusLine = null;
 }

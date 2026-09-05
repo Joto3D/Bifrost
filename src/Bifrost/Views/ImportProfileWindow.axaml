@@ -1,0 +1,107 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:Bifrost.ViewModels"
+        x:Class="Bifrost.Views.ImportProfileWindow"
+        x:DataType="vm:ImportProfileViewModel"
+        Title="Import Profile"
+        Width="520" Height="460"
+        WindowStartupLocation="CenterOwner">
+    <Grid Margin="18" RowDefinitions="*,Auto">
+
+        <!-- Paste step -->
+        <StackPanel Grid.Row="0" Spacing="12" IsVisible="{Binding ShowPasteStep}">
+            <TextBlock Text="Paste a share code from a friend — Bifrost's own, or an r2modman/Thunderstore Mod Manager profile code — or pick a .bifrostprofile file."
+                       TextWrapping="Wrap" Opacity="0.75" FontSize="12" />
+            <TextBox Text="{Binding CodeText}" AcceptsReturn="True" Height="90" TextWrapping="Wrap" PlaceholderText="Paste share code here" />
+            <TextBlock Text="{Binding ErrorLine}" Foreground="#E05A5A" FontSize="12" TextWrapping="Wrap" IsVisible="{Binding ErrorLine, Converter={x:Static ObjectConverters.IsNotNull}}" />
+        </StackPanel>
+
+        <!-- Plan step -->
+        <ScrollViewer Grid.Row="0" IsVisible="{Binding ShowPlanStep}">
+            <StackPanel Spacing="12">
+                <TextBlock Text="{Binding ImportedName, StringFormat='Importing &quot;{0}&quot;'}" FontSize="16" FontWeight="SemiBold" />
+                <TextBlock Text="Nothing here can be imported — see below for why." Opacity="0.6" IsVisible="{Binding PlanIsEmpty}" />
+
+                <Border Background="{DynamicResource BifrostCardBackgroundBrush}" BorderBrush="{DynamicResource BifrostCardBorderBrush}" BorderThickness="1" CornerRadius="10" Padding="12"
+                        IsVisible="{Binding HasResolvableRows}">
+                    <StackPanel Spacing="6">
+                        <TextBlock Text="WILL INSTALL" FontSize="11" FontWeight="SemiBold" Opacity="0.6" LetterSpacing="1" />
+                        <ItemsControl ItemsSource="{Binding ResolvableRows}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate DataType="vm:ImportResolvableRow">
+                                    <Grid ColumnDefinitions="*,Auto" Margin="0,2">
+                                        <TextBlock Grid.Column="0" Text="{Binding FullName}" />
+                                        <TextBlock Grid.Column="1" Text="{Binding VersionText}" FontSize="11" Opacity="0.7" />
+                                    </Grid>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </Border>
+
+                <Border Background="{DynamicResource BifrostCardBackgroundBrush}" BorderBrush="{DynamicResource BifrostCardBorderBrush}" BorderThickness="1" CornerRadius="10" Padding="12"
+                        IsVisible="{Binding HasAlreadyInstalledRows}">
+                    <StackPanel Spacing="6">
+                        <TextBlock Text="ALREADY INSTALLED" FontSize="11" FontWeight="SemiBold" Opacity="0.6" LetterSpacing="1" />
+                        <ItemsControl ItemsSource="{Binding AlreadyInstalledRows}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate DataType="vm:ImportInstalledRow">
+                                    <Grid ColumnDefinitions="*,Auto" Margin="0,2">
+                                        <TextBlock Grid.Column="0" Text="{Binding FullName}" />
+                                        <TextBlock Grid.Column="1" Text="{Binding VersionText}" Opacity="0.6" FontSize="11" />
+                                    </Grid>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </Border>
+
+                <Border Background="{DynamicResource BifrostCardBackgroundBrush}" BorderBrush="{DynamicResource BifrostCardBorderBrush}" BorderThickness="1" CornerRadius="10" Padding="12"
+                        IsVisible="{Binding HasUnresolvableRows}">
+                    <StackPanel Spacing="6">
+                        <TextBlock Text="CAN'T IMPORT" FontSize="11" FontWeight="SemiBold" Opacity="0.6" LetterSpacing="1" />
+                        <ItemsControl ItemsSource="{Binding UnresolvableRows}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate DataType="vm:ImportUnresolvableRow">
+                                    <StackPanel Spacing="1" Margin="0,3">
+                                        <TextBlock Text="{Binding FullName}" FontWeight="Medium" />
+                                        <TextBlock Text="{Binding Reason}" Opacity="0.6" FontSize="11" TextWrapping="Wrap" />
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </StackPanel>
+                </Border>
+
+                <TextBlock Text="{Binding ErrorLine}" Foreground="#E05A5A" FontSize="12" TextWrapping="Wrap" IsVisible="{Binding ErrorLine, Converter={x:Static ObjectConverters.IsNotNull}}" />
+            </StackPanel>
+        </ScrollViewer>
+
+        <!-- Done step -->
+        <StackPanel Grid.Row="0" Spacing="10" IsVisible="{Binding ShowDoneStep}">
+            <TextBlock Text="{Binding CreatedProfile.Name, StringFormat='Imported &quot;{}{0}&quot;'}" FontSize="16" FontWeight="SemiBold" Foreground="#2ECC71" />
+            <TextBlock Text="{Binding CreatedProfile.Mods.Count, StringFormat='{}{0} mod(s) added. Use Apply on it from the Profiles list when you are ready to switch to it.'}"
+                       Opacity="0.7" FontSize="12" TextWrapping="Wrap" />
+        </StackPanel>
+
+        <!-- Footer -->
+        <Grid Grid.Row="1" ColumnDefinitions="Auto,*,Auto,Auto" Margin="0,14,0,0">
+            <Button Grid.Column="0" Content="Back" Command="{Binding BackCommand}" IsVisible="{Binding ShowPlanStep}" IsEnabled="{Binding !IsApplying}" />
+            <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="10">
+                <TextBlock Text="{Binding ProgressLine}" IsVisible="{Binding IsApplying}" Opacity="0.6" FontSize="11" VerticalAlignment="Center" />
+                <ProgressBar IsIndeterminate="True" Width="16" Height="16" IsVisible="{Binding IsApplying}" VerticalAlignment="Center" />
+            </StackPanel>
+            <Button Grid.Column="3" Content="Import from File…" Click="OnImportFromFileClick"
+                    IsVisible="{Binding ShowPasteStep}" IsEnabled="{Binding !IsParsing}" Margin="0,0,10,0" />
+            <Button Grid.Column="3" Content="Parse Code" Command="{Binding ParseCodeCommand}"
+                    IsVisible="{Binding ShowPasteStep}" IsEnabled="{Binding !IsParsing}"
+                    Background="{DynamicResource BifrostAccentButtonFillBrush}" Foreground="White" />
+            <Button Grid.Column="3" Content="{Binding InstallableCount, StringFormat='Install &amp; Create Profile ({0})'}"
+                    Command="{Binding ApplyCommand}" IsVisible="{Binding ShowPlanStep}"
+                    IsEnabled="{Binding !IsApplying}"
+                    Background="{DynamicResource BifrostAccentButtonFillBrush}" Foreground="White" />
+            <Button Grid.Column="3" Content="Done" Click="OnDoneClick" IsVisible="{Binding ShowDoneStep}"
+                    Background="{DynamicResource BifrostAccentButtonFillBrush}" Foreground="White" />
+        </Grid>
+    </Grid>
+</Window>

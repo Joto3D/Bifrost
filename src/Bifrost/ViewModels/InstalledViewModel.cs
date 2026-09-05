@@ -91,7 +91,8 @@ public partial class InstalledViewModel : ViewModelBase
                 // an update — mirrors ModManager.UpdatesAvailable's own
                 // source == "local" skip.
                 var latest = mod.Source == "local" ? null : pkg?.LatestVersion?.VersionNumber;
-                var row = new InstalledModRowViewModel(mod, latest) { IconUrl = pkg is not null ? ThunderstoreClient.IconUrl(pkg) : null };
+                var classification = ModClassifier.Classify(mod.FullName, pkg);
+                var row = new InstalledModRowViewModel(mod, latest, classification) { IconUrl = pkg is not null ? ThunderstoreClient.IconUrl(pkg) : null };
                 row.PropertyChanged += async (_, e) =>
                 {
                     if (e.PropertyName == nameof(InstalledModRowViewModel.Enabled))
@@ -103,6 +104,7 @@ public partial class InstalledViewModel : ViewModelBase
             }
 
             LoadConfigAssociations(byFullName);
+            await ApplyNexusUpdateInfoAsync(manifest);
 
             StatusMessage = $"{Mods.Count} mod(s) installed.";
         }
@@ -156,6 +158,51 @@ public partial class InstalledViewModel : ViewModelBase
             row.SetKeybinds(text is null
                 ? Array.Empty<string>()
                 : BepInExConfig.Parse(text).KeyboardShortcuts.Select(entry => $"{entry.Key}: {entry.RawValue}"));
+        }
+    }
+
+    /// <summary>
+    /// A "nexus"-sourced mod has no Thunderstore index entry to compare
+    /// against, so <see cref="RefreshCoreAsync"/>'s thunderstore-only
+    /// <c>latest</c> lookup always leaves it with no update badge. This
+    /// checks back with Nexus's own API (best effort — a missing API key or
+    /// a network hiccup just leaves those rows without an update badge,
+    /// same as before) via <see cref="ModManager.UpdatesAvailableAsync"/>
+    /// and applies any nexus-sourced results onto the already-built rows.
+    /// Mirrors the macOS app's <c>ModManager.updatesAvailable</c> nexus
+    /// branch, just applied as a post-pass here since this view model builds
+    /// its rows' <c>LatestVersion</c> inline rather than through that method.
+    /// </summary>
+    private async Task ApplyNexusUpdateInfoAsync(InstalledManifest manifest)
+    {
+        if (!manifest.Mods.Any(m => m.Source == "nexus"))
+        {
+            return;
+        }
+        try
+        {
+            var updates = await _services.ModManager.UpdatesAvailableAsync(_index);
+            var nexusLatestByFullName = updates.ToDictionary(u => u.FullName, u => u.LatestVersion);
+            var changed = false;
+            foreach (var row in Mods)
+            {
+                if (row.Mod.Source == "nexus" && nexusLatestByFullName.TryGetValue(row.FullName, out var latest))
+                {
+                    row.LatestVersion = latest;
+                    changed = true;
+                }
+            }
+            if (changed)
+            {
+                OnPropertyChanged(nameof(UpdatableCount));
+                OnPropertyChanged(nameof(HasUpdatable));
+                UpdateAllCommand.NotifyCanExecuteChanged();
+            }
+        }
+        catch
+        {
+            // Best effort — same "no update badge shown" fallback as a
+            // missing Thunderstore index entry.
         }
     }
 

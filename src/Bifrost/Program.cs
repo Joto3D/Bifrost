@@ -17,7 +17,42 @@ sealed class Program
             return RunSelfCheck();
         }
 
-        BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
+        // Single-instance + nxm:// forwarding: a Windows-registered URL
+        // protocol always spawns a brand-new process for each click (see
+        // NxmProtocolRegistrar), so a second launch needs to hand its
+        // argument to the already-running instance and exit rather than
+        // opening a confusing second window. Only engaged when the "Handle
+        // nxm:// links" setting is on — otherwise every launch behaves
+        // exactly as it did before this feature existed.
+        var settings = new AppSettingsStore().Load();
+        SingleInstance? singleInstance = null;
+        if (settings.EnableNxmProtocol)
+        {
+            singleInstance = new SingleInstance();
+            if (!singleInstance.AcquirePrimary())
+            {
+                var nxmArgument = Array.Find(args, a => a.StartsWith("nxm://", StringComparison.OrdinalIgnoreCase));
+                // Always forward *something* — a real nxm link when this
+                // launch carried one, otherwise just an "activate" nudge so
+                // a plain second double-click still raises the running
+                // window instead of silently doing nothing.
+                SingleInstance.TryForward(nxmArgument ?? "activate");
+                singleInstance.Dispose();
+                return 0;
+            }
+        }
+
+        App.PendingNxmArgument = Array.Find(args, a => a.StartsWith("nxm://", StringComparison.OrdinalIgnoreCase));
+        App.SingleInstanceHost = singleInstance;
+
+        try
+        {
+            BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
+        }
+        finally
+        {
+            singleInstance?.Dispose();
+        }
         return 0;
     }
 

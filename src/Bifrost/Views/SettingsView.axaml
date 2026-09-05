@@ -1,6 +1,7 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:Bifrost.ViewModels"
+             xmlns:conv="using:Bifrost.Converters"
              x:Class="Bifrost.Views.SettingsView"
              x:DataType="vm:SettingsViewModel">
     <Grid>
@@ -84,6 +85,43 @@
                         <TextBlock Text="{Binding TotalBackupSize, StringFormat='Total size: {0}'}" IsVisible="{Binding HasBackups}" Opacity="0.6" FontSize="11" />
 
                         <Button Content="Open backups folder" Command="{Binding OpenBackupsFolderCommand}" HorizontalAlignment="Left" />
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+
+            <StackPanel Spacing="8">
+                <TextBlock Text="NEXUS MODS" FontSize="12" FontWeight="SemiBold" Opacity="0.6" LetterSpacing="1" />
+                <Border Background="{DynamicResource BifrostCardBackgroundBrush}"
+                        BorderBrush="{DynamicResource BifrostCardBorderBrush}" BorderThickness="1"
+                        CornerRadius="10" Padding="16">
+                    <StackPanel Spacing="12">
+                        <Grid IsVisible="{Binding NexusKeySaved}" ColumnDefinitions="Auto,*,Auto">
+                            <TextBlock Grid.Column="0" Text="&#x2713;" Foreground="#2ECC71" FontWeight="Bold" Margin="0,0,8,0" />
+                            <TextBlock Grid.Column="1" Text="API key saved" VerticalAlignment="Center" />
+                            <Button Grid.Column="2" Content="Remove" Command="{Binding RemoveNexusApiKeyCommand}" />
+                        </Grid>
+                        <StackPanel Orientation="Horizontal" Spacing="10" IsVisible="{Binding !NexusKeySaved}">
+                            <TextBox Text="{Binding NexusApiKeyInput}" PlaceholderText="Nexus API key" PasswordChar="*" Width="260" />
+                            <Button Content="Save" Command="{Binding SaveNexusApiKeyCommand}" />
+                        </StackPanel>
+
+                        <StackPanel Orientation="Horizontal" Spacing="10">
+                            <Button Content="Validate" Command="{Binding ValidateNexusKeyCommand}" IsEnabled="{Binding NexusKeySaved}" />
+                            <ProgressBar IsIndeterminate="True" Width="16" Height="16" IsVisible="{Binding IsValidatingNexusKey}" VerticalAlignment="Center" />
+                            <TextBlock Text="{Binding NexusValidationLine}" FontSize="12" VerticalAlignment="Center" TextWrapping="Wrap"
+                                       Foreground="{Binding NexusValidationFailed, Converter={x:Static conv:StatusConverters.ErrorOrSecondaryBrush}}" />
+                        </StackPanel>
+
+                        <Button Content="Get your API key" Command="{Binding OpenNexusApiKeyPageCommand}" HorizontalAlignment="Left" />
+
+                        <TextBlock Text="On any Valheim mod page, click &quot;Mod Manager Download&quot; — Bifrost will catch it and install."
+                                   Opacity="0.6" FontSize="11" TextWrapping="Wrap" />
+
+                        <StackPanel Spacing="2">
+                            <CheckBox Content="Handle nxm:// Mod Manager Download links" IsChecked="{Binding EnableNxmProtocol}" />
+                            <TextBlock Text="Registers Bifrost as the Windows handler for Nexus's &quot;Mod Manager Download&quot; links (HKCU\Software\Classes\nxm). Turn off if another mod manager should handle them instead."
+                                       Opacity="0.6" FontSize="11" TextWrapping="Wrap" Margin="26,0,0,0" />
+                        </StackPanel>
                     </StackPanel>
                 </Border>
             </StackPanel>

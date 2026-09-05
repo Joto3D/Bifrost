@@ -3,6 +3,8 @@ using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Markup.Xaml;
+using Avalonia.Threading;
+using Bifrost.Core.Services;
 using Bifrost.Services;
 using Bifrost.Theming;
 using Bifrost.ViewModels;
@@ -12,6 +14,19 @@ namespace Bifrost;
 
 public partial class App : Application
 {
+    /// <summary>
+    /// Set by <c>Program.Main</c> before Avalonia starts: this process's own
+    /// <c>nxm://</c> command-line argument, if the very first click of a
+    /// "Mod Manager Download" link is what launched Bifrost in the first
+    /// place (rather than a later click while Bifrost was already running,
+    /// which arrives via <see cref="SingleInstance"/> forwarding instead —
+    /// see <see cref="SetUpNexusLinkHandling"/>).
+    /// </summary>
+    public static string? PendingNxmArgument { get; set; }
+
+    /// <summary>Set by <c>Program.Main</c> when this process won the single-instance mutex — owns listening for a later launch's forwarded <c>nxm://</c> argument (or plain "activate" nudge). Null when the "Handle nxm:// links" setting is off.</summary>
+    public static SingleInstance? SingleInstanceHost { get; set; }
+
     private TrayIcon? _trayIcon;
     private NativeMenu? _trayMenu;
     private MainViewModel? _mainViewModel;
@@ -42,9 +57,53 @@ public partial class App : Application
             desktop.MainWindow = _mainWindow;
 
             SetUpTrayIcon(desktop, _mainViewModel, _mainWindow);
+            SetUpNexusLinkHandling(_mainViewModel, _mainWindow);
         }
 
         base.OnFrameworkInitializationCompleted();
+    }
+
+    // MARK: - Nexus Mods (nxm://) link handling
+
+    /// <summary>
+    /// Self-registers the <c>nxm://</c> protocol handler (Settings toggle,
+    /// default on — see <see cref="Bifrost.Core.Models.AppSettings.EnableNxmProtocol"/>),
+    /// then wires up both ways an <c>nxm://</c> link reaches this running
+    /// instance: this process's own launch argument
+    /// (<see cref="PendingNxmArgument"/>, when a "Mod Manager Download"
+    /// click is what started Bifrost), and a later click forwarded from a
+    /// brand-new second process over <see cref="SingleInstanceHost"/>'s pipe
+    /// (Windows always spawns a new process per protocol-launch — see
+    /// <c>SingleInstance</c>/<c>Program.cs</c>).
+    /// </summary>
+    private void SetUpNexusLinkHandling(MainViewModel mainViewModel, MainWindow mainWindow)
+    {
+        var settings = mainViewModel.Services.Settings;
+        if (settings.EnableNxmProtocol && OperatingSystem.IsWindows())
+        {
+            try
+            {
+                NxmProtocolRegistrar.Register(Environment.ProcessPath ?? Environment.GetCommandLineArgs()[0]);
+            }
+            catch
+            {
+                // Best effort — a locked-down machine shouldn't block startup.
+            }
+        }
+
+        SingleInstanceHost?.StartListening(message => Dispatcher.UIThread.Post(() =>
+        {
+            ActivateMainWindow(mainWindow);
+            if (message.StartsWith("nxm://", StringComparison.OrdinalIgnoreCase))
+            {
+                _ = mainViewModel.HandleNexusLinkAsync(message);
+            }
+        }));
+
+        if (PendingNxmArgument is { } pending)
+        {
+            _ = mainViewModel.HandleNexusLinkAsync(pending);
+        }
     }
 
     // MARK: - Tray icon

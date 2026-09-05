@@ -32,6 +32,15 @@ public partial class SettingsViewModel : ViewModelBase
     [ObservableProperty] private bool _startSteamSilently;
     [ObservableProperty] private bool _backupSavesBeforeModdedLaunch;
     [ObservableProperty] private bool _showTrayIcon;
+    [ObservableProperty] private bool _enableNxmProtocol;
+
+    // MARK: - Nexus Mods
+
+    [ObservableProperty] private string _nexusApiKeyInput = "";
+    [ObservableProperty] private bool _nexusKeySaved;
+    [ObservableProperty] private bool _isValidatingNexusKey;
+    [ObservableProperty] private string? _nexusValidationLine;
+    [ObservableProperty] private bool _nexusValidationFailed;
 
     // MARK: - Backups
 
@@ -52,7 +61,10 @@ public partial class SettingsViewModel : ViewModelBase
         StartSteamSilently = _services.Settings.StartSteamSilently;
         BackupSavesBeforeModdedLaunch = _services.Settings.BackupSavesBeforeModdedLaunch;
         ShowTrayIcon = _services.Settings.ShowTrayIcon;
+        EnableNxmProtocol = _services.Settings.EnableNxmProtocol;
         _loadingSettings = false;
+
+        NexusKeySaved = WindowsCredentials.Read(WindowsCredentials.NexusApiKeyTarget) is not null;
 
         foreach (var palette in ThemePalette.All)
         {
@@ -71,6 +83,15 @@ public partial class SettingsViewModel : ViewModelBase
     partial void OnBackupSavesBeforeModdedLaunchChanged(bool value) => PersistSettings();
     partial void OnShowTrayIconChanged(bool value) => PersistSettings();
 
+    partial void OnEnableNxmProtocolChanged(bool value)
+    {
+        PersistSettings();
+        if (!_loadingSettings)
+        {
+            ApplyNxmProtocolRegistration(value);
+        }
+    }
+
     private void PersistSettings()
     {
         if (_loadingSettings)
@@ -82,7 +103,25 @@ public partial class SettingsViewModel : ViewModelBase
             StartSteamSilently = StartSteamSilently,
             BackupSavesBeforeModdedLaunch = BackupSavesBeforeModdedLaunch,
             ShowTrayIcon = ShowTrayIcon,
+            EnableNxmProtocol = EnableNxmProtocol,
         });
+    }
+
+    /// <summary>Registers/unregisters the <c>nxm://</c> handler live when the Settings toggle changes, mirroring the same live-effect the tray-icon toggle already gets — no restart needed either way.</summary>
+    private static void ApplyNxmProtocolRegistration(bool enabled)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+        if (enabled)
+        {
+            NxmProtocolRegistrar.Register(Environment.ProcessPath ?? Environment.GetCommandLineArgs()[0]);
+        }
+        else
+        {
+            NxmProtocolRegistrar.Unregister();
+        }
     }
 
     [RelayCommand]
@@ -188,6 +227,70 @@ public partial class SettingsViewModel : ViewModelBase
 
     [RelayCommand]
     private void OpenBackupsFolder() => Launcher.OpenBackupsFolder();
+
+    // MARK: - Nexus Mods
+
+    [RelayCommand]
+    private void SaveNexusApiKey()
+    {
+        var trimmed = NexusApiKeyInput.Trim();
+        if (trimmed.Length == 0)
+        {
+            return;
+        }
+        try
+        {
+            WindowsCredentials.Save(trimmed, WindowsCredentials.NexusApiKeyTarget);
+            NexusKeySaved = true;
+            NexusApiKeyInput = "";
+            NexusValidationLine = null;
+            NexusValidationFailed = false;
+        }
+        catch (Exception ex)
+        {
+            NexusValidationLine = $"Couldn't save key: {ex.Message}";
+            NexusValidationFailed = true;
+        }
+    }
+
+    [RelayCommand]
+    private void RemoveNexusApiKey()
+    {
+        WindowsCredentials.Delete(WindowsCredentials.NexusApiKeyTarget);
+        NexusKeySaved = false;
+        NexusApiKeyInput = "";
+        NexusValidationLine = null;
+        NexusValidationFailed = false;
+    }
+
+    [RelayCommand]
+    private async Task ValidateNexusKeyAsync()
+    {
+        var key = WindowsCredentials.Read(WindowsCredentials.NexusApiKeyTarget);
+        if (key is null)
+        {
+            return;
+        }
+        IsValidatingNexusKey = true;
+        try
+        {
+            var result = await new NexusClient().ValidateKeyAsync(key);
+            NexusValidationLine = $"Connected as {result.Name} ({(result.IsPremium ? "Premium" : "Free")})";
+            NexusValidationFailed = false;
+        }
+        catch (Exception ex)
+        {
+            NexusValidationLine = ex.Message;
+            NexusValidationFailed = true;
+        }
+        finally
+        {
+            IsValidatingNexusKey = false;
+        }
+    }
+
+    [RelayCommand]
+    private void OpenNexusApiKeyPage() => Launcher.OpenUrl("https://www.nexusmods.com/users/myaccount?tab=api");
 
     /// <summary>Arms the inline restore-confirmation overlay for <paramref name="row"/> — see <see cref="IsConfirmingRestore"/>.</summary>
     [RelayCommand]

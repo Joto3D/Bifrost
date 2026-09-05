@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using Avalonia.Media;
 using Bifrost.Core.Models;
 using Bifrost.Core.Services;
 using Bifrost.Services;
@@ -40,6 +41,46 @@ public partial class BrowseViewModel : ViewModelBase
     private List<ModManager.ResolvedInstall> _pendingPlan = new();
 
     public static IReadOnlyList<BrowseSortOrder> SortOrders { get; } = Enum.GetValues<BrowseSortOrder>();
+
+    // MARK: - Surprise Me
+
+    [ObservableProperty] private bool _diceBounce;
+
+    public IBrush DiceForeground => DiceBounce ? new SolidColorBrush(Color.Parse("#7C5CFC")) : new SolidColorBrush(Color.Parse("#8A8A92"));
+    public ITransform DiceTransform => DiceBounce ? new RotateTransform(24) : new RotateTransform(0);
+
+    partial void OnDiceBounceChanged(bool value)
+    {
+        OnPropertyChanged(nameof(DiceForeground));
+        OnPropertyChanged(nameof(DiceTransform));
+    }
+
+    /// <summary>
+    /// Picks a random well-rated, not-yet-installed mod (<see cref="SurpriseMe.Pick"/>)
+    /// from the full fetched index (not just whatever the current search
+    /// filtered down to) and plays a short bounce, unless Windows' reduced
+    /// motion is on (see <see cref="WindowsAccessibility.AnimationsEnabled"/>).
+    /// The view's code-behind opens the returned package's detail window —
+    /// same as clicking "Details…" on its row would, if it even has a
+    /// visible row right now.
+    /// </summary>
+    public ThunderstorePackage? RollSurpriseMe()
+    {
+        _ = PlayDiceBounceAsync();
+        var manifest = _services.ModManager.LoadManifest();
+        return SurpriseMe.Pick(_index, manifest);
+    }
+
+    private async Task PlayDiceBounceAsync()
+    {
+        if (!WindowsAccessibility.AnimationsEnabled())
+        {
+            return;
+        }
+        DiceBounce = true;
+        await Task.Delay(TimeSpan.FromMilliseconds(220));
+        DiceBounce = false;
+    }
 
     public BrowseViewModel(AppServices services)
     {

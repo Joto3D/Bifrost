@@ -248,6 +248,9 @@ public static class Launcher
     /// <summary>Opens Bifrost's save-backups folder in Explorer.</summary>
     public static void OpenBackupsFolder() => OpenFolder(BifrostPaths.SaveBackupsDir);
 
+    /// <summary>Opens <paramref name="url"/> in the system's default browser — used by Settings' "Get your API key" link (Nexus Mods).</summary>
+    public static void OpenUrl(string url) => Process.Start(new ProcessStartInfo { FileName = url, UseShellExecute = true });
+
     private static void OpenFolder(string path)
     {
         if (!Directory.Exists(path))

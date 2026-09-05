@@ -58,5 +58,18 @@ public sealed class InstalledManifest
         /// load.
         /// </summary>
         public string Source { get; set; } = "thunderstore";
+
+        /// <summary>
+        /// For a <see cref="Source"/> == "nexus" entry (installed via the
+        /// <c>nxm://</c> "Mod Manager Download" flow — see
+        /// <see cref="Services.ModManager.InstallFromNexusAsync"/>): the
+        /// Nexus mod id, used by <see cref="Services.ModManager.UpdatesAvailableAsync"/>
+        /// to check back with Nexus's own API for a newer version instead of
+        /// the Thunderstore index. Null for every other source.
+        /// </summary>
+        public int? NexusModId { get; set; }
+
+        /// <summary>The Nexus file id alongside <see cref="NexusModId"/> for the same "nexus"-sourced entries. Recorded for reference; not currently used to resolve anything on its own.</summary>
+        public int? NexusFileId { get; set; }
     }
 }

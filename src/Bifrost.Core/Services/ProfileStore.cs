@@ -103,6 +103,44 @@ public sealed class ProfileStore
         return profile;
     }
 
+    /// <summary>
+    /// Creates a new profile named <paramref name="name"/> with an explicit
+    /// mod list, optionally marked as a server-guest profile (see
+    /// <see cref="Profile.IsServerGuest"/>). Used by
+    /// <see cref="ServerJoinPlanner"/> and <see cref="ProfileShare"/> rather
+    /// than the <see cref="Create(string,bool)"/> overload above, which only
+    /// knows how to start empty or copy the current install.
+    /// </summary>
+    public Profile Create(string name, List<Profile.ProfileMod> mods, bool isServerGuest = false)
+    {
+        var file = LoadOrMigrate();
+        var profile = new Profile { Id = Guid.NewGuid(), Name = name, Mods = mods, IsServerGuest = isServerGuest };
+        file.Profiles.Add(profile);
+        Save(file);
+        return profile;
+    }
+
+    /// <summary>
+    /// Overwrites <paramref name="profileId"/>'s mod list with
+    /// <paramref name="mods"/>, and — when <paramref name="isServerGuest"/>
+    /// is non-null — also overwrites the profile's guest marker (see
+    /// <see cref="Profile.IsServerGuest"/>). Left null, the existing marker
+    /// is untouched. Used by <see cref="ServerJoinPlanner.Apply"/> to write
+    /// a computed plan into the target profile before reconciling the real
+    /// install.
+    /// </summary>
+    public void SetMods(Guid profileId, List<Profile.ProfileMod> mods, bool? isServerGuest = null)
+    {
+        var file = LoadOrMigrate();
+        var profile = file.Profiles.FirstOrDefault(p => p.Id == profileId) ?? throw new ProfileStoreException($"No profile with id {profileId}");
+        profile.Mods = mods;
+        if (isServerGuest is { } guest)
+        {
+            profile.IsServerGuest = guest;
+        }
+        Save(file);
+    }
+
     /// <summary>Creates a copy of <paramref name="id"/> named <paramref name="newName"/>.</summary>
     public Profile Duplicate(Guid id, string newName)
     {

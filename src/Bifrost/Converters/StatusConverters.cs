@@ -55,4 +55,11 @@ public static class StatusConverters
 
     public static readonly IValueConverter TriSubtitle =
         new FuncValueConverter<bool?, string>(v => v switch { true => "Modded", false => "Vanilla", _ => "Unknown" });
+
+    private static readonly IBrush ErrorBrush = new SolidColorBrush(Color.FromRgb(0xE0, 0x5A, 0x5A));
+    private static readonly IBrush SecondaryBrush = new SolidColorBrush(Color.FromArgb(180, 0x80, 0x80, 0x80));
+
+    /// <summary>bool -> a red (true, error) or muted-secondary (false) brush — for a status line that's sometimes an error, sometimes an ordinary caption (e.g. Nexus key validation).</summary>
+    public static readonly IValueConverter ErrorOrSecondaryBrush =
+        new FuncValueConverter<bool, IBrush>(isError => isError ? ErrorBrush : SecondaryBrush);
 }

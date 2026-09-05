@@ -9,13 +9,26 @@ theming) for Windows using [Avalonia UI](https://avaloniaui.net/) on
 .NET, with an MVVM architecture via
 [CommunityToolkit.Mvvm](https://learn.microsoft.com/dotnet/communitytoolkit/mvvm/).
 
-**Status: feature-complete port, built and verified entirely on macOS —
-not yet run on a real Windows machine.** Every service, the self-test
-suite, and the packaged `.exe` build/run without issue here, and Avalonia
-+ .NET's cross-compilation story is solid, but there is no substitute for
-someone actually double-clicking `Bifrost.exe` on Windows once. See
+**Status: feature-complete port (parity rounds A + B), built and verified
+entirely on macOS — not yet run on a real Windows machine.** Every
+service, the self-test suite, and the packaged `.exe` build/run without
+issue here, and Avalonia + .NET's cross-compilation story is solid, but
+there is no substitute for someone actually double-clicking `Bifrost.exe`
+on Windows once. See
 [Known caveat](#known-caveat-untested-on-real-windows) below — that's the
 one thing a Windows tester should check first.
+
+Parity round A added: install-from-file (drag a `.zip`/`.dll` straight
+onto the window), save backups with retention + restore, Steam
+build-update detection, "Update All", a tray icon, and silent-Steam
+launch. Parity round B (this round) added: **Nexus Mods** integration
+(`nxm://` link handling, API key storage, update checks), **multiplayer
+safety** (mod risk classification, a guided "Join a Server" flow),
+**profile sharing** (Bifrost's own share codes/files plus r2modman
+interop), and a **fun round** (runestone tips, saga stats, launch quips,
+Surprise Me, a subtle post-launch celebration) — see
+[Parity round B](#parity-round-b-nexus-mods-multiplayer-safety-profile-sharing-fun-round)
+below for the full rundown.
 
 ## Layout
 
@@ -27,10 +40,14 @@ src/
     Services/         #   IconCache / IconLoader (async Thunderstore icon loading+caching)
     Converters/        #   small XAML value converters for status pills/badges
   Bifrost.Core/      # platform-neutral class library:
-                     #   Models/   InstalledManifest, Profile(sFile), ThunderstorePackage
+                     #   Models/   InstalledManifest, Profile(sFile), ThunderstorePackage, NxmLink
                      #   Services/ GameLocator, VdfParser, DoorstopConfig,
                      #             ThunderstoreClient, BepInExInstaller, ModManager,
-                     #             ProfileStore, Launcher, Diagnostics, SelfTest
+                     #             ProfileStore, Launcher, Diagnostics, SelfTest,
+                     #             NexusClient, WindowsCredentials, NxmProtocolRegistrar,
+                     #             SingleInstance, ModClassifier, ServerJoinPlanner,
+                     #             ProfileShare, Flavor, RunestoneTips, SagaStats,
+                     #             SurpriseMe, WindowsAccessibility
 scripts/
   publish-win.sh     # builds a self-contained win-x64 single-file Bifrost.exe
   package-win.sh     # publish-win.sh + zips Bifrost.exe with a friends'
@@ -41,23 +58,32 @@ scripts/
 The four tabs (Home / Browse / Installed / Settings) mirror the macOS
 app's tab layout:
 
-- **Home** — a launcher hero: title row, a 2x2 setup-status grid (game
-  found, BepInEx installed, launch mode, Steam running), a first-run
-  banner that walks through fixing a red status inline, the active
-  profile picker, and the big gradient **Play Modded** / quiet **Play
-  Vanilla** buttons.
+- **Home** — a launcher hero: title row, a runestone tip card (rotating
+  practical tips + Valheim lore), a 2x2 setup-status grid (game found,
+  BepInEx installed, launch mode, Steam running), a first-run banner that
+  walks through fixing a red status inline, the active profile picker
+  (with a "Back to my profile" hint when you're on a guest profile), a
+  Saga stats card (playtime, worlds/heroes, mods by risk class, backup
+  count), and the big gradient **Play Modded** / quiet **Play Vanilla** /
+  **Join a Server…** buttons — with a decorative launch quip while
+  launching and a subtle celebration pulse once BepInEx confirms plugins
+  loaded.
 - **Browse** — a searchable/sortable Thunderstore package list as cards
   (56px async-loaded, disk-cached icon; download/rating/updated stat
-  chips; category capsules), with an Install flow that confirms a
-  dependency-resolution plan before touching disk.
+  chips; category capsules), a **Surprise Me** dice button that opens a
+  random well-rated, not-yet-installed mod, and an Install flow that
+  confirms a dependency-resolution plan before touching disk.
 - **Installed** — manifest rows (icon, keybind chips parsed from each
-  mod's BepInEx config, an accent "Update" badge) with enable/disable,
-  update, remove, and a profiles management dialog
-  (create/duplicate/rename/delete).
+  mod's BepInEx config, an accent "Update" badge, a "local"/"nexus"
+  source chip, and a colored multiplayer-risk badge) with enable/disable,
+  update, remove, install-from-file, Update All, and a profiles
+  management dialog (create/duplicate/rename/delete/share/import).
 - **Settings** — detected paths (Steam root, game directory, app data
-  directory), the **Appearance** theme picker (six palettes, applied
-  live), refresh the Thunderstore index, open logs/plugins/app-data
-  folders.
+  directory), launch preferences (silent Steam, pre-launch backup, tray
+  icon), save backups (list/restore), a **Nexus Mods** section (API key,
+  validate, get-key link, `nxm://` protocol toggle), the **Appearance**
+  theme picker (six palettes, applied live), refresh the Thunderstore
+  index, open logs/plugins/app-data folders.
 
 ## Theming
 
@@ -77,14 +103,76 @@ under both Fluent light and dark — not just "the dark colors forced onto
 a light window." Switching a palette in Settings → Appearance updates
 every open view immediately, live, with no restart.
 
+## Parity round B: Nexus Mods, multiplayer safety, profile sharing, fun round
+
+**Nexus Mods** (`Bifrost.Core/Services/NexusClient.cs`,
+`WindowsCredentials.cs`, `NxmProtocolRegistrar.cs`,
+`Models/NxmLink.cs`, `SingleInstance.cs`): stores the user's Nexus API key
+via the Windows Credential Manager (`advapi32.dll` `CredWrite`/`CredRead`/
+`CredDelete`, guarded by `OperatingSystem.IsWindows()`; falls back to a
+dev-only plaintext file under app-data on non-Windows so `--check` can
+exercise the logic here). Self-registers `nxm://` at startup
+(`HKCU\Software\Classes\nxm`, Settings toggle, default on). Since a
+Windows protocol launch always spawns a brand-new process, a second
+launch detects the already-running instance (a named mutex) and forwards
+its `nxm://` argument over a named pipe rather than opening a confusing
+second window. `ModManager.InstallFromNexusAsync` downloads the resolved
+CDN link and feeds it through the same install pipeline a dropped `.zip`
+uses, recording `source: "nexus"` + the mod/file ids so
+`UpdatesAvailableAsync` can check back with Nexus's own API later.
+
+**Multiplayer safety** (`ModClassifier.cs`, `ServerJoinPlanner.cs`,
+`ServerJoinViewModel`/`ServerJoinWindow`): classifies every installed mod
+(curated table → Thunderstore category → keyword heuristic → Unknown)
+into client-only / adds-items / world-altering / server-synced / unknown,
+surfaced as a colored badge on Installed rows. The guided "Join a
+Server…" window (Home tab) walks through picking a target profile,
+reviewing the computed plan (with per-mod overrides — items mods default
+to staying enabled with a warning, world-altering/unknown mods default to
+disabled), and applying it: a pre-server safety backup first, then the
+profile is marked a "guest" profile and reconciled against the real
+install. Never disables anything until that final confirmed step.
+
+**Profile sharing** (`ProfileShare.cs`, `ProfilesWindow`'s
+Copy/Export/Import buttons, `ImportProfileViewModel`/`ImportProfileWindow`):
+the exact same native JSON shape as the macOS app (`{"bifrost":1,"name":...,
+"mods":[...]}`, base64 for a share code or pretty-printed as a
+`.bifrostprofile` file) — cross-platform by design, so a code from either
+platform imports on the other. Also interops with r2modman/Thunderstore
+Mod Manager's own profile-code service
+(`thunderstore.io/api/experimental/legacyprofile/`): exports a zipped
+`export.r2x` YAML (hand-rolled minimal reader/writer, `System.IO.Compression`
+in-memory rather than shelling out), uploads it, and returns a bare-UUID
+code; importing auto-detects a pasted code's format (UUID vs. Bifrost's
+base64) to pick the right importer. Every import previews exactly what
+will install / is already present / can't be resolved (and why) before
+anything touches disk.
+
+**Fun round** (`Flavor.cs`, `RunestoneTips.cs`, `SagaStats.cs`,
+`SurpriseMe.cs`, `WindowsAccessibility.cs`): 25 launch quips shown
+alongside the real status line during a launch; 25 runestone
+tips/lore lines rotating on Home; a Saga stats card built from Steam's
+`localconfig.vdf` (playtime — same nested-VDF-path walk as the macOS
+app, via a new `VdfParser.FindNestedValue`), the Valheim save directory
+(worlds/characters), installed-mod classification counts, and backup
+totals; a Surprise Me dice button in Browse; and a subtle celebration
+pulse when a modded launch's BepInEx log confirms plugins loaded. Both
+animated bits (the dice bounce and the celebration) check Windows'
+reduced-motion setting (`SPI_GETCLIENTAREAANIMATION` via a small
+`user32.dll` P/Invoke) and simply don't play if it's off, mirroring the
+macOS app's own `accessibilityDisplayShouldReduceMotion` guards.
+
 ## What's ported from the macOS reference implementation
 
 Ported 1:1 (same algorithms, Windows-appropriate I/O):
 `ModManager` (resolve/install/uninstall/enable-disable/update, r2modman
-payload-mapping heuristics, dependency resolution), `ProfileStore`
-(apply/reconcile/sync/migration), `ThunderstoreClient` (index fetch with
-`If-Modified-Since` conditional revalidation), `Diagnostics` (BepInEx log
-classification), `ThemePalette`/`ThemeStore` (see above).
+payload-mapping heuristics, dependency resolution, Nexus install/update),
+`ProfileStore` (apply/reconcile/sync/migration/guest profiles),
+`ThunderstoreClient` (index fetch with `If-Modified-Since` conditional
+revalidation), `Diagnostics` (BepInEx log classification),
+`ThemePalette`/`ThemeStore` (see above), `NexusClient`, `ModClassifier`,
+`ServerJoinPlanner`, `ProfileShare`, `Flavor`, `RunestoneTips`,
+`SagaStats`, `SurpriseMe`.
 
 Ported with a Windows-specific delta (see each type's doc comment for
 details): `GameLocator` (registry-resolved Steam root instead of
@@ -98,10 +186,12 @@ Steam launch options + a wrapper script — Windows Valheim just needs
 
 Not ported (Windows doesn't need it): `SteamConfigurator` /
 `SteamLaunchLogParser` / `SteamLogWatcher` / `VDF`'s splicing half — no
-Steam launch-options editing happens on Windows at all. The BepInEx
-config editor (arbitrary `.cfg` key editing) exists in `Bifrost.Core` and
-is exercised by `--check`, but isn't wired into the Windows UI yet — the
-Installed tab shows each mod's parsed keybinds as read-only chips.
+Steam launch-options editing happens on Windows at all (`VdfParser` here
+is read-only, extended in round B with a nested-block walker for Saga
+stats' playtime lookup). The BepInEx config editor (arbitrary `.cfg` key
+editing) is fully wired into the Windows UI — each Installed row with an
+associated config gets a "Config" button opening an editor window, and
+"Configs…" opens a full list.
 
 ## Requirements to build
 
@@ -166,9 +256,22 @@ manager end-to-end (real Thunderstore downloads: a simple mod, a
 mod with a resolved dependency + the loader, enable/disable, uninstall,
 update-detection), profile reconcile (migration, CRUD, the three apply
 cases, manual-edit sync, delete-active guard), manifest JSON shape
-compatibility (see above — skips on Windows), and the config editor
+compatibility (see above — skips on Windows), the config editor
 (parser/writer round-trip, keyed apply, README fetch — real-file sections
-skip on Windows).
+skip on Windows), install-from-file, save backups, game-update detection,
+Update All, index auto-refresh staleness, Launcher/silent-Steam planning,
+the app settings store — and, added in parity round B: `nxm://` link
+parsing, the Nexus credential store round trip (real Credential Manager
+on Windows, dev fallback here), `nxm://` registry protocol registration
+(**SKIPPED** on macOS — Windows-only), single-instance mutex + named-pipe
+forwarding (runs for real here too — both are cross-platform .NET APIs),
+the mod classifier (curated/category/heuristic fixtures, plus an
+informational listing against this machine's real manifest.json), the
+guided Join-a-Server planner (grouping/override/pre-server-backup/apply),
+profile sharing (native round trip, `.bifrostprofile` file round trip,
+version-mismatch rejection, and a **live** r2modman round trip against
+the real Thunderstore endpoint), Saga stats fixtures, Flavor/Runestone
+data-integrity checks, and the Surprise Me eligibility filter.
 
 ## Publishing for Windows
 
@@ -232,6 +335,20 @@ real Windows:
    doorstop toggle and Steam `rungameid` launch have only been verified
    by reading Valheim's own Windows-side BepInEx/doorstop docs, not by
    watching Valheim actually load a mod.
+5. **(Parity round B, Windows-only paths)** Click a real "Mod Manager
+   Download" link on a Nexus Mods page with Bifrost already running, and
+   again with it closed, confirming both the registry association
+   (`HKCU\Software\Classes\nxm`) and the single-instance forward actually
+   work end to end on real Windows — the mutex+named-pipe mechanism
+   itself is verified on macOS in `--check`, but the *registry*
+   registration (`NxmProtocolRegistrar`) only SKIPs there and has never
+   run for real.
+6. Confirm the Windows Credential Manager round trip for the Nexus API
+   key (Settings → Nexus Mods) — `--check` only exercises the dev-only
+   plaintext fallback on this Mac.
+7. Confirm the reduced-motion check (`WindowsAccessibility.AnimationsEnabled`,
+   backing the Surprise Me dice bounce and the post-launch celebration)
+   actually reads Windows' "Animation effects" setting correctly.
 
 Report anything that doesn't match this README back to Joshua.
 
