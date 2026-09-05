@@ -118,6 +118,10 @@ enum DebugCheck {
         print("")
         print("== Save backups ==")
         await checkSaveBackups()
+
+        print("")
+        print("== Multiplayer safety ==")
+        await checkMultiplayerSafety(realModManager: modManager)
     }
 
     // MARK: - Safety guard
@@ -2041,5 +2045,325 @@ enum DebugCheck {
     /// from.
     private static func filesIdentical(_ a: URL, _ b: URL) async -> Bool {
         (try? await ShellRunner.run("/usr/bin/diff", [a.path, b.path]))?.status == 0
+    }
+
+    // MARK: - Multiplayer safety
+
+    /// Exercises `ModClassifier`, `ServerJoinPlanner`, and the
+    /// `Profile.isServerGuest` guest marker: a read-only classification
+    /// pass against this developer's REAL installed manifest (the only
+    /// place real state is touched, and only ever read), then everything
+    /// else against throwaway TEMP fixtures (fake game dir + manifest +
+    /// launch dir + profiles.json + save dir + backups dir, all guarded by
+    /// `assertUnderTempDir`) — category-based classification, heuristic
+    /// fallbacks, the unknown default, plan-building's three groupings and
+    /// per-mod overrides, and a full `ServerJoinPlanner.apply` proving the
+    /// backup-first-then-reconcile order.
+    private static func checkMultiplayerSafety(realModManager: ModManager) async {
+        print("1) classify the REAL installed manifest (read-only) against the cached Thunderstore index:")
+        await checkRealManifestClassification(realModManager: realModManager)
+
+        print("")
+        print("2) category-based classification (fixture packages):")
+        checkCategoryClassification()
+
+        print("")
+        print("3) heuristic fallback classification (fixture packages):")
+        checkHeuristicClassification()
+
+        print("")
+        print("4) unknown default (no curated/category/heuristic signal):")
+        checkUnknownClassification()
+
+        print("")
+        print("5) guided join-flow: plan building (fixture manifest, groupings + overrides):")
+        checkServerJoinPlanBuilding()
+
+        print("")
+        print("6) guided join-flow: apply — backup-first, then reconcile (fixture manifest/profile/backups):")
+        await checkServerJoinPlanApply()
+
+        print("")
+        print("7) Profile.isServerGuest backward compat (old profiles.json without the marker field):")
+        checkProfileGuestMarkerBackwardCompat()
+    }
+
+    /// Read-only: loads the REAL manifest and classifies every installed
+    /// mod against the cached Thunderstore index, printing each one's
+    /// class + basis. Nothing here writes anything. Expects no `.unknown`
+    /// among this developer's own currently-installed mods — every one of
+    /// them is either in `ModClassifier.curatedOverrides` or has a usable
+    /// Thunderstore category/description.
+    private static func checkRealManifestClassification(realModManager: ModManager) async {
+        let manifest = await realModManager.loadManifest()
+        guard !manifest.mods.isEmpty else {
+            print("  skipped: no mods installed on this machine")
+            return
+        }
+
+        let client = ThunderstoreClient()
+        guard let index = try? await client.fetchIndex(force: false) else {
+            print("  skipped: could not load Thunderstore index")
+            return
+        }
+
+        var anyUnknown = false
+        for mod in manifest.mods.sorted(by: { $0.fullName < $1.fullName }) {
+            let classification = ModClassifier.classify(mod: mod, index: index)
+            if classification.modClass == .unknown { anyUnknown = true }
+            print("  \(classification.modClass.glyph) \(mod.fullName) -> \(classification.modClass.displayName) (\(classification.basis))")
+        }
+        print("  -> \(!anyUnknown ? "PASS" : "FAIL") (expect no \u{1F7E1}\u{26AA} .unknown among currently installed mods)")
+    }
+
+    /// Builds a minimal `ThunderstorePackage` fixture — everything
+    /// `ModClassifier` doesn't look at is filled with an inert placeholder.
+    private static func fixturePackage(fullName: String, categories: [String], name: String? = nil, description: String = "") -> ThunderstorePackage {
+        let version = ThunderstorePackage.Version(
+            name: name ?? fullName,
+            fullName: "\(fullName)-1.0.0",
+            description: description,
+            icon: nil,
+            versionNumber: "1.0.0",
+            dependencies: [],
+            downloadURL: URL(string: "https://example.invalid/\(fullName).zip")!,
+            downloads: 0,
+            fileSize: 0
+        )
+        return ThunderstorePackage(
+            name: name ?? fullName,
+            fullName: fullName,
+            owner: "FixtureAuthor",
+            packageURL: URL(string: "https://thunderstore.io/c/valheim/p/FixtureAuthor/\(fullName)/")!,
+            dateUpdated: Date(),
+            ratingScore: 0,
+            isDeprecated: false,
+            categories: categories,
+            versions: [version]
+        )
+    }
+
+    /// "World Generation" -> worldAltering, "Client-side" -> clientOnly,
+    /// bare "Server-side" -> serverSynced — none of these fixture full
+    /// names are in `curatedOverrides`, so this exercises the category
+    /// resolution rule on its own.
+    private static func checkCategoryClassification() {
+        let cases: [(fullName: String, categories: [String], expectedClass: ModClass, expectedCategory: String)] = [
+            ("Fixture-WorldGenPack", ["World Generation", "Client-side"], .worldAltering, "World Generation"),
+            ("Fixture-ClientTweak", ["Client-side", "Server-side"], .clientOnly, "Client-side"),
+            ("Fixture-ServerLib", ["Server-side"], .serverSynced, "Server-side"),
+        ]
+        var allPass = true
+        for testCase in cases {
+            let package = fixturePackage(fullName: testCase.fullName, categories: testCase.categories)
+            let result = ModClassifier.classify(fullName: testCase.fullName, package: package)
+            let pass = result.modClass == testCase.expectedClass && result.basis == "category: \(testCase.expectedCategory)"
+            allPass = allPass && pass
+            print("  \(testCase.fullName) categories=\(testCase.categories) -> \(result.modClass.displayName) (\(result.basis)) (expect \(testCase.expectedClass.displayName)) -> \(pass ? "PASS" : "FAIL")")
+        }
+        print("  -> \(allPass ? "PASS" : "FAIL")")
+    }
+
+    /// Name/description keyword fallbacks, one per group, on fixture full
+    /// names carrying no curated entry and no informative category.
+    private static func checkHeuristicClassification() {
+        let cases: [(fullName: String, name: String, description: String, expectedClass: ModClass, expectedKeyword: String)] = [
+            ("Fixture-SomeTexturePack", "Some Texture Pack", "Replaces low-res ground textures with 4K versions.", .clientOnly, "texture"),
+            ("Fixture-BiomeExpander", "Biome Expander", "Adds new biome types to world generation.", .worldAltering, "biome"),
+            ("Fixture-NewWeaponsMod", "New Weapons Mod", "Adds a handful of craftable weapon types.", .addsItems, "weapon"),
+        ]
+        var allPass = true
+        for testCase in cases {
+            let package = fixturePackage(fullName: testCase.fullName, categories: [], name: testCase.name, description: testCase.description)
+            let result = ModClassifier.classify(fullName: testCase.fullName, package: package)
+            let pass = result.modClass == testCase.expectedClass && result.basis == "heuristic: contains \"\(testCase.expectedKeyword)\""
+            allPass = allPass && pass
+            print("  \(testCase.fullName) (\"\(testCase.name)\") -> \(result.modClass.displayName) (\(result.basis)) (expect \(testCase.expectedClass.displayName)) -> \(pass ? "PASS" : "FAIL")")
+        }
+        print("  -> \(allPass ? "PASS" : "FAIL")")
+    }
+
+    /// A fixture with no curated entry, no informative category, and no
+    /// heuristic keyword hit falls all the way through to `.unknown` — both
+    /// with a known-but-uninformative package and with no package at all
+    /// (the `source == "local"`/`"nexus"` case).
+    private static func checkUnknownClassification() {
+        let fullName = "Fixture-TotallyGenericMod"
+        let package = fixturePackage(fullName: fullName, categories: ["Mods", "Misc"], name: "Totally Generic Mod", description: "Does some stuff.")
+        let result = ModClassifier.classify(fullName: fullName, package: package)
+        let pass = result.modClass == .unknown && result.basis == "no signal"
+        print("  \(fullName) (uninformative category+description) -> \(result.modClass.displayName) (\(result.basis)) -> \(pass ? "PASS" : "FAIL")")
+
+        let noPackageResult = ModClassifier.classify(fullName: "Fixture-LocalOnlyMod", package: nil)
+        let noPackagePass = noPackageResult.modClass == .unknown && noPackageResult.basis == "no signal"
+        print("  Fixture-LocalOnlyMod (package: nil, e.g. a local/nexus install) -> \(noPackageResult.modClass.displayName) (\(noPackageResult.basis)) -> \(noPackagePass ? "PASS" : "FAIL")")
+
+        print("  -> \((pass && noPackagePass) ? "PASS" : "FAIL")")
+    }
+
+    /// Drives `ServerJoinPlanner.buildPlan` against a fixture manifest with
+    /// one mod per class (all resolved via `curatedOverrides`, so an empty
+    /// `index` is fine) and asserts the three groupings plus their
+    /// defaults, then re-builds with a per-mod override to prove it flips
+    /// a single mod's decision without touching any other.
+    private static func checkServerJoinPlanBuilding() {
+        let manifest = InstalledManifest(
+            loader: nil,
+            mods: [
+                .init(fullName: "Azumatt-FirstPersonMode", version: "1.0.0", enabled: true, files: []), // clientOnly
+                .init(fullName: "ValheimModding-Jotunn", version: "1.0.0", enabled: true, files: []), // serverSynced
+                .init(fullName: "Soloredis-RtDBiomes", version: "1.0.0", enabled: true, files: []), // worldAltering
+                .init(fullName: "blacks7ar-GunzNBullets", version: "1.0.0", enabled: true, files: []), // addsItems
+                .init(fullName: "Fixture-TotallyUnknownMod", version: "1.0.0", enabled: true, files: []), // unknown
+            ]
+        )
+
+        let plan = ServerJoinPlanner.buildPlan(manifest: manifest, index: [])
+
+        let keepEnabledOK = Set(plan.keepEnabled.map(\.fullName)) == ["Azumatt-FirstPersonMode", "ValheimModding-Jotunn"]
+            && plan.keepEnabled.allSatisfy(\.enabled)
+        let addsItemsOK = Set(plan.addsItemsWarning.map(\.fullName)) == ["blacks7ar-GunzNBullets"]
+            && plan.addsItemsWarning.allSatisfy(\.enabled) // default: stays enabled
+        let disableOK = Set(plan.disable.map(\.fullName)) == ["Soloredis-RtDBiomes", "Fixture-TotallyUnknownMod"]
+            && plan.disable.allSatisfy { !$0.enabled } // default: disabled
+
+        print("  keepEnabled=\(plan.keepEnabled.map(\.fullName).sorted()) (clientOnly+serverSynced, all enabled) -> \(keepEnabledOK ? "PASS" : "FAIL")")
+        print("  addsItemsWarning=\(plan.addsItemsWarning.map(\.fullName)) (default: kept enabled with a warning) -> \(addsItemsOK ? "PASS" : "FAIL")")
+        print("  disable=\(plan.disable.map(\.fullName).sorted()) (worldAltering+unknown, default: disabled) -> \(disableOK ? "PASS" : "FAIL")")
+
+        let overridden = ServerJoinPlanner.buildPlan(manifest: manifest, index: [], overrides: ["Soloredis-RtDBiomes": true])
+        let worldAlteringOverridden = overridden.disable.first { $0.fullName == "Soloredis-RtDBiomes" }?.enabled == true
+        let unknownStillDefaulted = overridden.disable.first { $0.fullName == "Fixture-TotallyUnknownMod" }?.enabled == false
+        let overrideOK = worldAlteringOverridden && unknownStillDefaulted
+        print("  override keeps Soloredis-RtDBiomes enabled while Fixture-TotallyUnknownMod stays at its default: \(overrideOK) -> \(overrideOK ? "PASS" : "FAIL")")
+
+        print("  -> \((keepEnabledOK && addsItemsOK && disableOK && overrideOK) ? "PASS" : "FAIL")")
+    }
+
+    /// Drives `ServerJoinPlanner.apply` end to end against throwaway TEMP
+    /// fixtures (fake game dir + manifest + launch dir + profiles.json +
+    /// save dir + backups dir, all under the system temp directory and
+    /// guarded by `assertUnderTempDir`): proves the "pre-server" backup
+    /// happens (and lands in the fixture backups dir, not anywhere real)
+    /// before the target profile's enabled states are reconciled, and that
+    /// the target profile ends up marked `isServerGuest` and active.
+    private static func checkServerJoinPlanApply() async {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent("BifrostCheck-serverjoin-\(UUID().uuidString)")
+        let fakeGameDir = root.appendingPathComponent("game")
+        let fakeManifestURL = root.appendingPathComponent("manifest.json")
+        let fakeLaunchDir = root.appendingPathComponent("launch")
+        let fakeProfilesURL = root.appendingPathComponent("profiles.json")
+        let fakeSaveDir = root.appendingPathComponent("save")
+        let fakeBackupsDir = root.appendingPathComponent("backups")
+        assertUnderTempDir(fakeGameDir, label: "server-join fakeGameDir")
+        assertUnderTempDir(fakeManifestURL, label: "server-join fakeManifestURL")
+        assertUnderTempDir(fakeLaunchDir, label: "server-join fakeLaunchDir")
+        assertUnderTempDir(fakeProfilesURL, label: "server-join fakeProfilesURL")
+        assertUnderTempDir(fakeSaveDir, label: "server-join fakeSaveDir")
+        assertUnderTempDir(fakeBackupsDir, label: "server-join fakeBackupsDir")
+        defer { try? fm.removeItem(at: root) }
+
+        // One mod per relevant group, each with a real dummy .dll on disk
+        // so `setEnabled`'s file-rename logic (exercised via `apply` ->
+        // `ProfileStore.apply` -> `ModManager.setEnabled`) has something to
+        // move, plus real fixture save data so `backupNow` has something
+        // to actually zip rather than reporting `.skipped`.
+        let fixtureManifest = InstalledManifest(
+            loader: nil,
+            mods: [
+                .init(fullName: "Azumatt-FirstPersonMode", version: "1.0.0", enabled: true, files: ["BepInEx/plugins/Azumatt-FirstPersonMode/FPM.dll"]), // clientOnly -> stays enabled
+                .init(fullName: "Soloredis-RtDBiomes", version: "1.0.0", enabled: true, files: ["BepInEx/plugins/Soloredis-RtDBiomes/RtD.dll"]), // worldAltering -> gets disabled
+                .init(fullName: "blacks7ar-GunzNBullets", version: "1.0.0", enabled: true, files: ["BepInEx/plugins/blacks7ar-GunzNBullets/Gunz.dll"]), // addsItems -> stays enabled
+            ]
+        )
+        do {
+            for mod in fixtureManifest.mods {
+                for relativePath in mod.files {
+                    let url = fakeGameDir.appendingPathComponent(relativePath)
+                    try fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+                    try Data("dummy".utf8).write(to: url)
+                }
+            }
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            try fm.createDirectory(at: fakeManifestURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try encoder.encode(fixtureManifest).write(to: fakeManifestURL)
+
+            let worldDB = fakeSaveDir.appendingPathComponent("worlds_local/FixtureWorld.db")
+            try fm.createDirectory(at: worldDB.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data("fixture world".utf8).write(to: worldDB)
+        } catch {
+            print("  skipped: could not build fixture: \(error)")
+            return
+        }
+
+        let modManager = ModManager(manifestURL: fakeManifestURL, launchDir: fakeLaunchDir)
+        let profileStore = ProfileStore(profilesURL: fakeProfilesURL, modManager: modManager)
+        let saveBackup = SaveBackup(saveDir: fakeSaveDir, backupsDir: fakeBackupsDir)
+
+        let targetProfile = await profileStore.create(name: "Server Guest", mods: [], isServerGuest: false)
+        let plan = ServerJoinPlanner.buildPlan(manifest: fixtureManifest, index: [])
+
+        do {
+            let result = try await ServerJoinPlanner.apply(
+                plan: plan,
+                profileID: targetProfile.id,
+                gameDir: fakeGameDir,
+                profileStore: profileStore,
+                saveBackup: saveBackup
+            )
+
+            let backupCreated: Bool
+            if case .created(let summary) = result.backupOutcome {
+                backupCreated = summary.url.lastPathComponent.hasSuffix("-pre-server.zip") && fm.fileExists(atPath: summary.url.path)
+            } else {
+                backupCreated = false
+            }
+            print("  pre-server backup created in fixture backups dir: \(backupCreated) (outcome: \(result.backupOutcome))")
+
+            let manifestAfter = await modManager.loadManifest()
+            let clientOnlyStillEnabled = manifestAfter.mods.first { $0.fullName == "Azumatt-FirstPersonMode" }?.enabled == true
+            let worldAlteringDisabled = manifestAfter.mods.first { $0.fullName == "Soloredis-RtDBiomes" }?.enabled == false
+            let addsItemsStillEnabled = manifestAfter.mods.first { $0.fullName == "blacks7ar-GunzNBullets" }?.enabled == true
+            let disabledFilePresent = fm.fileExists(atPath: fakeGameDir.appendingPathComponent("BepInEx/plugins/Soloredis-RtDBiomes/RtD.dll.disabled").path)
+            print("  reconciled: FirstPersonMode enabled=\(clientOnlyStillEnabled) RtDBiomes enabled=\(!worldAlteringDisabled) (.disabled file present=\(disabledFilePresent)) GunzNBullets enabled=\(addsItemsStillEnabled)")
+
+            let profileAfter = await profileStore.load()
+            let target = profileAfter.profiles.first { $0.id == targetProfile.id }
+            let markedGuest = target?.isServerGuest == true
+            let becameActive = profileAfter.activeProfileID == targetProfile.id
+            print("  target profile marked isServerGuest=true: \(markedGuest), became the active profile: \(becameActive)")
+            print("  apply() reported missing=\(result.applyResult.missing) (expect empty — every plan mod was already installed)")
+
+            let pass = backupCreated && clientOnlyStillEnabled && worldAlteringDisabled && disabledFilePresent
+                && addsItemsStillEnabled && markedGuest && becameActive && result.applyResult.missing.isEmpty
+            print("  -> \(pass ? "PASS" : "FAIL")")
+        } catch {
+            print("  FAILED: \(error)")
+        }
+    }
+
+    /// A `profiles.json` written before `Profile.isServerGuest` existed
+    /// must still decode, with the field defaulting to `nil`
+    /// (`isGuestProfile` treating that the same as `false`) rather than
+    /// failing to load entirely.
+    private static func checkProfileGuestMarkerBackwardCompat() {
+        let oldStyleJSON = """
+        {
+          "activeProfileID": null,
+          "profiles": [
+            { "id": "00000000-0000-0000-0000-000000000001", "name": "Old Profile", "mods": [] }
+          ]
+        }
+        """
+        guard let data = oldStyleJSON.data(using: .utf8),
+              let decoded = try? JSONDecoder().decode(ProfilesFile.self, from: data),
+              let profile = decoded.profiles.first else {
+            print("  FAILED: could not decode a pre-isServerGuest profiles.json fixture")
+            return
+        }
+        let pass = profile.isServerGuest == nil && profile.isGuestProfile == false
+        print("  old profiles.json (no isServerGuest key) decodes: isServerGuest=\(profile.isServerGuest.map(String.init) ?? "nil") isGuestProfile=\(profile.isGuestProfile) -> \(pass ? "PASS" : "FAIL")")
     }
 }

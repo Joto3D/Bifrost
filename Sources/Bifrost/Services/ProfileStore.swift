@@ -128,6 +128,39 @@ actor ProfileStore {
         return profile
     }
 
+    /// Creates a new profile named `name` with an explicit mod list (and
+    /// optional guest marker) rather than a current-state snapshot — used
+    /// by the guided "Join a Server" flow (`ServerJoinPlanner`) to create
+    /// its target profile with the join plan's decided enabled states
+    /// already baked in.
+    @discardableResult
+    func create(name: String, mods: [Profile.ProfileMod], isServerGuest: Bool = false) async -> Profile {
+        var file = await loadOrMigrate()
+        let profile = Profile(id: UUID(), name: name, mods: mods, isServerGuest: isServerGuest)
+        file.profiles.append(profile)
+        try? save(file)
+        return profile
+    }
+
+    /// Overwrites `profileID`'s mod list (membership + enabled state) in
+    /// place — used by the guided "Join a Server" flow to update an
+    /// existing target profile (e.g. re-running the flow against the same
+    /// "Server Guest" profile) with a freshly computed plan just before
+    /// `apply`. `isServerGuest`, when non-nil, also overwrites the
+    /// profile's guest marker (see `Profile.isServerGuest`); left `nil`
+    /// (the default) leaves whatever the profile already had.
+    func setMods(profileID: UUID, mods: [Profile.ProfileMod], isServerGuest: Bool? = nil) async throws {
+        var file = await loadOrMigrate()
+        guard let index = file.profiles.firstIndex(where: { $0.id == profileID }) else {
+            throw ProfileStoreError.notFound(id: profileID)
+        }
+        file.profiles[index].mods = mods
+        if let isServerGuest {
+            file.profiles[index].isServerGuest = isServerGuest
+        }
+        try save(file)
+    }
+
     /// Creates a copy of `id` named `newName`, with the same mod list.
     @discardableResult
     func duplicate(id: UUID, newName: String) async throws -> Profile {

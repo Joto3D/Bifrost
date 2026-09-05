@@ -201,6 +201,7 @@ struct InstalledModsView: View {
                     mod: mod,
                     iconURL: iconURL(for: mod.fullName),
                     update: updates[mod.fullName],
+                    classification: classification(for: mod),
                     isBusy: busyFullNames.contains(mod.fullName),
                     keybinds: keybindsByFullName[mod.fullName] ?? [],
                     configURL: discoveredConfigs.first { $0.associatedFullName == mod.fullName }?.url,
@@ -237,6 +238,18 @@ struct InstalledModsView: View {
             return nil
         }
         return client.iconURL(for: package)
+    }
+
+    /// This mod's multiplayer-safety classification (see `ModClassifier`),
+    /// consulting the loaded Thunderstore index when available — falls
+    /// back to `package: nil` (curated/heuristic-only) before the index
+    /// has loaded, or for a `source == "local"`/`"nexus"` mod the index
+    /// never carries.
+    private func classification(for mod: InstalledManifest.InstalledMod) -> ModClassification {
+        if case .loaded(let packages) = indexState {
+            return ModClassifier.classify(mod: mod, index: packages)
+        }
+        return ModClassifier.classify(fullName: mod.fullName, package: nil)
     }
 
     private func loadIndexAndCheckUpdates(force: Bool) async {
@@ -410,6 +423,7 @@ private struct InstalledModRow: View {
     let mod: InstalledManifest.InstalledMod
     let iconURL: URL?
     let update: ModManager.UpdateInfo?
+    let classification: ModClassification
     let isBusy: Bool
     /// This mod's `KeyboardShortcut` entries from its associated `.cfg`
     /// file, if any were found — see `InstalledModsView.loadConfigs()`.
@@ -441,6 +455,7 @@ private struct InstalledModRow: View {
                     if update != nil {
                         AuroraBadge(text: "Update", systemImage: "arrow.up.circle.fill")
                     }
+                    ModClassBadge(classification: classification)
                 }
                 Text("v\(mod.version)")
                     .font(.caption)

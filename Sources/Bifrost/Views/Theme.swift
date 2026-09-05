@@ -347,6 +347,31 @@ struct AuroraBadge: View {
     }
 }
 
+/// A tinted capsule showing one mod's multiplayer-safety classification
+/// (see `ModClassifier`) — used on the Installed tab's rows and the
+/// guided "Join a Server" flow's plan. The tooltip spells out both what
+/// the color means and *why* this mod landed in that group (its
+/// `basis`), so the badge is legible without having to know Bifrost's
+/// color convention by heart.
+struct ModClassBadge: View {
+    let classification: ModClassification
+
+    private var tint: Color {
+        switch classification.modClass {
+        case .clientOnly: return .green
+        case .addsItems: return .orange
+        case .worldAltering: return .red
+        case .serverSynced: return .blue
+        case .unknown: return .gray
+        }
+    }
+
+    var body: some View {
+        Chip(text: "\(classification.modClass.glyph) \(classification.modClass.displayName)", tint: tint)
+            .help("\(classification.modClass.explanation)\n\nWhy: \(classification.basis)")
+    }
+}
+
 // MARK: - Status pill card (Home's 2x2 grid)
 
 /// One compact status check for the Home hero panel's 2x2 grid: an icon,

@@ -31,6 +31,15 @@ struct StatusPanel: View {
     @State private var pendingMissingMods: PendingMissingMods?
     @State private var lastBackupDate: Date?
 
+    /// Drives the guided "Join a Server" sheet (`ServerJoinSheetView`).
+    @State private var serverJoinSheetPresented = false
+    /// Whichever profile was active right before the guided flow's last
+    /// successful `apply` switched away from it — powers "Back to my
+    /// profile" below. Session-only (not persisted): a relaunch while a
+    /// guest profile is active just hides the hint's specific target and
+    /// falls back to the first non-guest profile instead.
+    @State private var priorProfileIDBeforeGuest: UUID?
+
     var body: some View {
         VStack(spacing: Theme.Spacing.xl) {
             titleRow
@@ -39,6 +48,9 @@ struct StatusPanel: View {
 
             VStack(spacing: Theme.Spacing.s) {
                 profileRow
+                if appState.activeProfile?.isGuestProfile == true {
+                    backToMyProfileHint
+                }
                 Text(modsSummaryLine)
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -91,6 +103,12 @@ struct StatusPanel: View {
             Button("Not Now", role: .cancel) {}
         } message: { pending in
             Text("This profile also wants: \(pending.missing.joined(separator: ", "))")
+        }
+        .sheet(isPresented: $serverJoinSheetPresented) {
+            ServerJoinSheetView(
+                onApplied: { previousProfileID in priorProfileIDBeforeGuest = previousProfileID },
+                onPlayModded: { play(modded: true) }
+            )
         }
     }
 
@@ -229,6 +247,41 @@ struct StatusPanel: View {
         return "\(enabledCount) mod\(enabledCount == 1 ? "" : "s") enabled"
     }
 
+    /// Shown below the profile picker whenever the active profile is a
+    /// guest one (`Profile.isGuestProfile`, set by `ServerJoinSheetView`)
+    /// — an easy way back to whatever profile was active before, without
+    /// having to remember its name in the picker.
+    private var backToMyProfileHint: some View {
+        HStack(spacing: Theme.Spacing.s) {
+            Image(systemName: "arrow.uturn.backward.circle")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Text("You're on a server-join profile.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Button("Back to my profile") {
+                guard let target = profileToReturnTo() else { return }
+                Task { await requestProfileSwitch(to: target) }
+            }
+            .font(.caption.weight(.semibold))
+            .buttonStyle(.plain)
+            .foregroundStyle(.blue)
+            .disabled(profileToReturnTo() == nil || isApplyingProfile)
+            Spacer()
+        }
+    }
+
+    /// `priorProfileIDBeforeGuest` when it's still a real profile,
+    /// otherwise the first non-guest profile Bifrost knows about (covers a
+    /// relaunch that landed on a guest profile with no in-session memory
+    /// of what came before it).
+    private func profileToReturnTo() -> UUID? {
+        if let priorProfileIDBeforeGuest, appState.profiles.profiles.contains(where: { $0.id == priorProfileIDBeforeGuest }) {
+            return priorProfileIDBeforeGuest
+        }
+        return appState.profiles.profiles.first { !$0.isGuestProfile }?.id
+    }
+
     // MARK: - Play section
 
     private var playSection: some View {
@@ -246,6 +299,14 @@ struct StatusPanel: View {
                 play(modded: false)
             } label: {
                 Label("Play Vanilla", systemImage: "play.fill")
+            }
+            .buttonStyle(.quiet)
+            .disabled(appState.status.gameFound == nil || isLaunching)
+
+            Button {
+                serverJoinSheetPresented = true
+            } label: {
+                Label("Join a Server…", systemImage: "person.wave.2")
             }
             .buttonStyle(.quiet)
             .disabled(appState.status.gameFound == nil || isLaunching)

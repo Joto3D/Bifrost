@@ -16,6 +16,18 @@ struct Profile: Codable, Sendable, Equatable, Identifiable, Hashable {
     var name: String
     var mods: [ProfileMod]
 
+    /// Marks this profile as a temporary "join a server" profile created
+    /// by the guided flow (`ServerJoinPlanner`/`ServerJoinSheetView`) —
+    /// drives the "Back to my profile" hint on Home. `Bool?` rather than
+    /// `Bool` so a `profiles.json` written before this field existed still
+    /// decodes (Swift's synthesized `Decodable` treats a missing key for
+    /// an `Optional` property as `nil`, rather than throwing) — `nil` and
+    /// `false` are equivalent everywhere this is read (see
+    /// `isGuestProfile`).
+    var isServerGuest: Bool? = nil
+
+    var isGuestProfile: Bool { isServerGuest == true }
+
     /// One mod's desired membership in a profile. Matched against
     /// `InstalledManifest.InstalledMod` by `fullName`.
     struct ProfileMod: Codable, Sendable, Equatable, Hashable {
