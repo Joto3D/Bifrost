@@ -1,0 +1,158 @@
+{"app_name":"Valheim","timestamp":"2026-09-05 13:59:07.00 +0100","app_version":"1.0","slice_uuid":"339e415f-1187-3e0b-9575-95857d508015","build_version":"0","platform":1,"bundleID":"com.coffeestain.valheim-steam","share_with_app_devs":0,"is_first_party":0,"bug_type":"309","os_version":"macOS 26.5.2 (25F84)","roots_installed":0,"name":"Valheim","incident_id":"D117010A-7421-4B21-AF6A-E3575845BCF5"}
+{
+  "uptime" : 11000,
+  "procRole" : "Unspecified",
+  "version" : 2,
+  "userID" : 501,
+  "deployVersion" : 210,
+  "modelCode" : "Mac16,10",
+  "coalitionID" : 1434,
+  "osVersion" : {
+    "train" : "macOS 26.5.2",
+    "build" : "25F84",
+    "releaseType" : "User"
+  },
+  "captureTime" : "2026-09-05 13:59:06.7960 +0100",
+  "codeSigningMonitor" : 2,
+  "incident" : "D117010A-7421-4B21-AF6A-E3575845BCF5",
+  "pid" : 5661,
+  "translated" : false,
+  "cpuType" : "ARM-64",
+  "procLaunch" : "2026-09-05 13:59:06.6585 +0100",
+  "procStartAbsTime" : 267517496958,
+  "procExitAbsTime" : 267520792319,
+  "procName" : "Valheim",
+  "procPath" : "\/Users\/USER\/Library\/Application Support\/Steam\/*\/valheim.app\/Contents\/MacOS\/Valheim",
+  "bundleInfo" : {"CFBundleShortVersionString":"1.0","CFBundleVersion":"0","CFBundleIdentifier":"com.coffeestain.valheim-steam"},
+  "storeInfo" : {"deviceIdentifierForVendor":"9018E786-9CBE-5EA9-95B0-B3B2AA0C7CDE","thirdParty":true},
+  "parentProc" : "steam_osx",
+  "parentPid" : 2645,
+  "coalitionName" : "com.valvesoftware.steam",
+  "crashReporterKey" : "AC4521CD-5639-F6D4-564A-31125962AE77",
+  "appleIntelligenceStatus" : {"state":"unavailable","reasons":["notOptedIn","assetIsNotReady"]},
+  "developerMode" : 1,
+  "responsiblePid" : 2645,
+  "responsibleProc" : "steam_osx",
+  "codeSigningID" : "com.coffeestain.valheim-steam",
+  "codeSigningTeamID" : "RE3E2MC4D9",
+  "codeSigningFlags" : 570491649,
+  "codeSigningValidationCategory" : 6,
+  "codeSigningTrustLevel" : 4294967295,
+  "codeSigningAuxiliaryInfo" : 0,
+  "instructionByteStream" : {"beforePC":"AAFA+aiDVPjp34C5C3lp+OjbQLnqAwiq6F9A+eljQPns20C5jO180w==","atPC":"KWlsuAgBCYvpAwCRKwEA+SoFAPkoCQD5AQAA0CEwP5F5BwCU6F9A+Q=="},
+  "bootSessionUUID" : "C73B1EDF-5770-47C1-9EC2-866E5B494E9C",
+  "sip" : "enabled",
+  "vmRegionInfo" : "0x8d4d6b720 is in 0x8cb400000-0xbca000000;  bytes after start: 160872224  bytes before end: 12703058143\n      REGION TYPE                    START - END         [ VSIZE] PRT\/MAX SHRMOD  REGION DETAIL\n      MALLOC_SMALL                8cb000000-8cb400000    [ 4096K] rw-\/rwx SM=PRV  \n--->  commpage (reserved)         8cb400000-bca000000    [ 12.0G] ---\/--- SM=NUL  reserved VM address space (unallocated)\n      GAP OF 0x3f6000000 BYTES\n      GPU Carveout (reserved)     fc0000000-1000000000   [  1.0G] ---\/--- SM=NUL  reserved VM address space (unallocated)",
+  "exception" : {"codes":"0x0000000000000002, 0x00000008d4d6b720","rawCodes":[2,37930579744],"type":"EXC_BAD_ACCESS","signal":"SIGBUS","subtype":"KERN_PROTECTION_FAILURE at 0x00000008d4d6b720"},
+  "termination" : {"flags":0,"code":10,"namespace":"SIGNAL","indicator":"Bus error: 10","byProc":"exc handler","byPid":5661},
+  "vmregioninfo" : "0x8d4d6b720 is in 0x8cb400000-0xbca000000;  bytes after start: 160872224  bytes before end: 12703058143\n      REGION TYPE                    START - END         [ VSIZE] PRT\/MAX SHRMOD  REGION DETAIL\n      MALLOC_SMALL                8cb000000-8cb400000    [ 4096K] rw-\/rwx SM=PRV  \n--->  commpage (reserved)         8cb400000-bca000000    [ 12.0G] ---\/--- SM=NUL  reserved VM address space (unallocated)\n      GAP OF 0x3f6000000 BYTES\n      GPU Carveout (reserved)     fc0000000-1000000000   [  1.0G] ---\/--- SM=NUL  reserved VM address space (unallocated)",
+  "extMods" : {"caller":{"thread_create":0,"thread_set_state":0,"task_for_pid":0},"system":{"thread_create":0,"thread_set_state":0,"task_for_pid":0},"targeted":{"thread_create":0,"thread_set_state":0,"task_for_pid":0},"warnings":0},
+  "faultingThread" : 0,
+  "threads" : [{"triggered":true,"id":131056,"threadState":{"x":[{"value":8287769864,"symbolLocation":304,"symbol":"__sF"},{"value":0},{"value":73896},{"value":256},{"value":4382910336},{"value":16},{"value":0},{"value":0},{"value":37757206528},{"value":37757124608},{"value":10840946},{"value":6519220136,"symbolLocation":0,"symbol":"AudioComponentFindNext"},{"value":173455136},{"value":0},{"value":0},{"value":0},{"value":6473648452,"symbolLocation":0,"symbol":"pthread_mutex_unlock"},{"value":8311068104},{"value":0},{"value":6092098504},{"sourceLine":95,"value":4374940832,"sourceFile":"entrypoint.c","symbol":"doorstop_ctor","symbolLocation":0},{"value":8284902640,"symbolLocation":5040,"symbol":"lsl::sPoolBytes"},{"value":4374955284},{"value":4374937880},{"value":6},{"value":160},{"value":4374938184},{"value":4374937792},{"value":16}],"flavor":"ARM_THREAD_STATE64","lr":{"value":4374947220},"cpsr":{"value":2147483648},"fp":{"value":6092096960},"sp":{"value":6092096512},"esr":{"value":2449473542,"description":"(Data Abort) byte read Translation fault"},"pc":{"value":4374947344,"matchesCrashFrame":1},"far":{"value":37930579744}},"queue":"com.apple.main-thread","frames":[{"imageOffset":9744,"sourceLine":523,"sourceFile":"plthook_osx.c","symbol":"plthook_open_real","imageIndex":0,"symbolLocation":2676},{"imageOffset":10284,"sourceLine":182,"sourceFile":"plthook_osx.c","symbol":"plthook_open_by_handle","imageIndex":0,"symbolLocation":280},{"imageOffset":3324,"sourceLine":109,"sourceFile":"entrypoint.c","symbol":"doorstop_ctor","imageIndex":0,"symbolLocation":92},{"imageOffset":314928,"symbol":"invocation function for block in dyld4::Loader::findAndRunAllInitializers(dyld4::RuntimeState&) const::$_0::operator()() const","symbolLocation":180,"imageIndex":3},{"imageOffset":360724,"symbol":"invocation function for block in dyld3::MachOAnalyzer::forEachInitializer(Diagnostics&, dyld3::MachOAnalyzer::VMAddrConverter const&, void (unsigned int) block_pointer, void const*) const","symbolLocation":320,"imageIndex":3},{"imageOffset":583776,"symbol":"invocation function for block in mach_o::UnsafeHeader::forEachSection(void (mach_o::UnsafeHeader::SectionInfo const&, bool&) block_pointer) const","symbolLocation":312,"imageIndex":3},{"imageOffset":570260,"symbol":"mach_o::UnsafeHeader::forEachLoadCommand(void (load_command const*, bool&) block_pointer) const","symbolLocation":208,"imageIndex":3},{"imageOffset":576572,"symbol":"mach_o::UnsafeHeader::forEachSection(void (mach_o::UnsafeHeader::SectionInfo const&, bool&) block_pointer) const","symbolLocation":124,"imageIndex":3},{"imageOffset":359432,"symbol":"dyld3::MachOAnalyzer::forEachInitializer(Diagnostics&, dyld3::MachOAnalyzer::VMAddrConverter const&, void (unsigned int) block_pointer, void const*) const","symbolLocation":516,"imageIndex":3},{"imageOffset":292820,"symbol":"dyld4::Loader::findAndRunAllInitializers(dyld4::RuntimeState&) const","symbolLocation":528,"imageIndex":3},{"imageOffset":263180,"symbol":"dyld4::JustInTimeLoader::runInitializers(dyld4::RuntimeState&) const","symbolLocation":36,"imageIndex":3},{"imageOffset":294640,"symbol":"dyld4::Loader::runInitializersBottomUp(dyld4::RuntimeState&, lsl::Vector<AuthenticatedValue<dyld4::Loader const*>>&, lsl::Vector<AuthenticatedValue<dyld4::Loader const*>>&) const","symbolLocation":568,"imageIndex":3},{"imageOffset":315080,"symbol":"dyld4::Loader::runInitializersBottomUpPlusUpwardLinks(dyld4::RuntimeState&) const::$_0::operator()() const","symbolLocation":116,"imageIndex":3},{"imageOffset":295384,"symbol":"dyld4::Loader::runInitializersBottomUpPlusUpwardLinks(dyld4::RuntimeState&) const","symbolLocation":716,"imageIndex":3},{"imageOffset":84476,"symbol":"dyld4::APIs::runAllInitializersForMain()","symbolLocation":528,"imageIndex":3},{"imageOffset":136080,"symbol":"dyld4::prepare(dyld4::APIs&, mach_o::UnsafeHeader const*)","symbolLocation":3880,"imageIndex":3},{"imageOffset":132172,"symbol":"dyld4::start(dyld4::KernelArgs*, void*, void*, unsigned long long)::$_1::operator()() const","symbolLocation":320,"imageIndex":3},{"imageOffset":130472,"symbol":"start","symbolLocation":6904,"imageIndex":3}]}],
+  "usedImages" : [
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4374937600,
+    "size" : 32768,
+    "uuid" : "a2745d80-f345-36c6-b8a1-81690b637703",
+    "path" : "\/Users\/USER\/Library\/Application Support\/Steam\/*\/libdoorstop_x64.dylib",
+    "name" : "libdoorstop_x64.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4374757376,
+    "CFBundleShortVersionString" : "1.0",
+    "CFBundleIdentifier" : "com.coffeestain.valheim-steam",
+    "size" : 16384,
+    "uuid" : "339e415f-1187-3e0b-9575-95857d508015",
+    "path" : "\/Users\/USER\/Library\/Application Support\/Steam\/*\/valheim.app\/Contents\/MacOS\/Valheim",
+    "name" : "Valheim",
+    "CFBundleVersion" : "0"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64",
+    "base" : 4438392832,
+    "size" : 26656768,
+    "uuid" : "099bd671-9d16-3710-90b9-24194c1bc489",
+    "path" : "\/Users\/USER\/Library\/Application Support\/Steam\/*\/valheim.app\/Contents\/Frameworks\/UnityPlayer.dylib",
+    "name" : "UnityPlayer.dylib"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64e",
+    "base" : 6469615616,
+    "size" : 680472,
+    "uuid" : "f924bdd3-4365-3466-9580-8b1b3fa8f857",
+    "path" : "\/usr\/lib\/dyld",
+    "name" : "dyld"
+  },
+  {
+    "size" : 0,
+    "source" : "A",
+    "base" : 0,
+    "uuid" : "00000000-0000-0000-0000-000000000000"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64e",
+    "base" : 6519148544,
+    "CFBundleShortVersionString" : "1.0",
+    "CFBundleIdentifier" : "com.apple.audio.AudioToolboxCore",
+    "size" : 3943456,
+    "uuid" : "868df717-7563-39d0-95eb-19ab37629a5a",
+    "path" : "\/System\/Library\/PrivateFrameworks\/AudioToolboxCore.framework\/Versions\/A\/AudioToolboxCore",
+    "name" : "AudioToolboxCore"
+  },
+  {
+    "source" : "P",
+    "arch" : "arm64e",
+    "base" : 6473641984,
+    "size" : 52028,
+    "uuid" : "4f33683c-18c8-39a1-800b-2e3bd43bcc13",
+    "path" : "\/usr\/lib\/system\/libsystem_pthread.dylib",
+    "name" : "libsystem_pthread.dylib"
+  }
+],
+  "sharedCache" : {
+  "base" : 6468485120,
+  "size" : 5990973440,
+  "uuid" : "157e6d2e-2e5c-39b1-8f2a-8866ee228bed"
+},
+  "vmSummary" : "ReadOnly portion of Libraries: Total=1.6G resident=0K(0%) swapped_out_or_unallocated=1.6G(100%)\nWritable regions: Total=90.4M written=288K(0%) resident=288K(0%) swapped_out=0K(0%) unallocated=90.1M(100%)\n\n                                VIRTUAL   REGION \nREGION TYPE                        SIZE    COUNT (non-coalesced) \n===========                     =======  ======= \nKernel Alloc Once                   32K        1 \nMALLOC                            16.8M        9 \nMALLOC guard page                 3520K        4 \nMemory Tag 22                     64.0M        1 \nSTACK GUARD                       56.0M        1 \nStack                             8176K        1 \n__AUTH                            4592K      458 \n__AUTH_CONST                      72.4M      795 \n__CTF                               824        1 \n__DATA                            28.8M      750 \n__DATA_CONST                      31.3M      803 \n__DATA_DIRTY                      6624K      688 \n__FONT_DATA                        2352        1 \n__LINKEDIT                       573.6M        4 \n__OBJC_RO                         79.1M        1 \n__OBJC_RW                         2598K        1 \n__TEXT                             1.0G      823 \n__TPRO_CONST                       128K        2 \npage table in kernel               288K        1 \nshared memory                       32K        1 \n===========                     =======  ======= \nTOTAL                              1.9G     4346 \n",
+  "legacyInfo" : {
+  "threadTriggered" : {
+    "queue" : "com.apple.main-thread"
+  }
+},
+  "logWritingSignature" : "973f9ddc96d004aedc2f837041bbec68fa3f135c",
+  "roots_installed" : 0,
+  "bug_type" : "309",
+  "trmStatus" : 8192,
+  "trialInfo" : {
+  "rollouts" : [
+    {
+      "rolloutId" : "6410af69ed1e1e7ab93ed169",
+      "factorPackIds" : [
+
+      ],
+      "deploymentId" : 240000011
+    },
+    {
+      "rolloutId" : "695fd05d8ca5554688521e5e",
+      "factorPackIds" : [
+        "695fd08781fcd20ded79c1d3",
+        "695fd0d28ca5554688521e5f",
+        "695fd09c8774dc09015a80e9",
+        "695fd0b18774dc09015a80ea"
+      ],
+      "deploymentId" : 3
+    }
+  ],
+  "experiments" : [
+
+  ]
+}
+}

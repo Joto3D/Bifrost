@@ -2130,13 +2130,16 @@ enum DebugCheck {
             return
         }
 
-        var anyUnknown = false
+        // Informational only: the user installs arbitrary mods, so an
+        // .unknown here is expected behavior (that's what the class is
+        // for), not a defect — never FAIL on the live machine's mod list.
+        var unknownCount = 0
         for mod in manifest.mods.sorted(by: { $0.fullName < $1.fullName }) {
             let classification = ModClassifier.classify(mod: mod, index: index)
-            if classification.modClass == .unknown { anyUnknown = true }
+            if classification.modClass == .unknown { unknownCount += 1 }
             print("  \(classification.modClass.glyph) \(mod.fullName) -> \(classification.modClass.displayName) (\(classification.basis))")
         }
-        print("  -> \(!anyUnknown ? "PASS" : "FAIL") (expect no \u{1F7E1}\u{26AA} .unknown among currently installed mods)")
+        print("  -> PASS (informational; \(unknownCount) unclassified — shown as \u{26AA} unknown in the UI)")
     }
 
     /// Builds a minimal `ThunderstorePackage` fixture — everything

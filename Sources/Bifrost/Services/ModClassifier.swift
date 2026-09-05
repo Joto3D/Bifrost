@@ -109,6 +109,8 @@ enum ModClassifier {
         // Willybach's HD/texture packs — purely visual asset replacements.
         "Willybach-Willybachs_HD_Seasonality": .clientOnly,
         "blacks7ar-GunzNBullets": .addsItems,
+        // Graphics-preset overhaul — purely visual.
+        "CarlosMods-CLGMMOGraphics": .clientOnly,
         "RandyKnapp-EquipmentAndQuickSlots": .addsItems,
         "Soloredis-RtDBiomes": .worldAltering,
         "Soloredis-RtDOcean": .worldAltering,
