@@ -106,6 +106,10 @@ enum DebugCheck {
         print("")
         print("== Config editor ==")
         await checkConfigEditor(realGameDir: located?.directory)
+
+        print("")
+        print("== Save backups ==")
+        await checkSaveBackups()
     }
 
     // MARK: - Safety guard
@@ -1339,5 +1343,168 @@ enum DebugCheck {
         } catch {
             print("  skipped: \(error) (likely offline)")
         }
+    }
+
+    // MARK: - Save backups
+
+    /// Exercises `SaveBackup` end to end against throwaway TEMP fixtures
+    /// (a fake save dir with dummy `.db`/`.fwl`/`.fch` files, a fake
+    /// backups dir, and a second fake dir to restore into — all guarded by
+    /// `assertUnderTempDir`): archive contents, pruning down to
+    /// `autoRetentionCount` while manual backups survive, a restore that
+    /// reproduces files byte-identically and takes its own pre-restore
+    /// safety backup, and the running-game refusal exercised both ways via
+    /// the injectable `isGameRunning` closure. Finishes with a read-only
+    /// line against the REAL save dir (existence + file counts only, never
+    /// written to).
+    private static func checkSaveBackups() async {
+        let fm = FileManager.default
+        let fixtureSaveDir = fm.temporaryDirectory.appendingPathComponent("BifrostCheck-savebackup-savedir-\(UUID().uuidString)")
+        let fixtureBackupsDir = fm.temporaryDirectory.appendingPathComponent("BifrostCheck-savebackup-backupsdir-\(UUID().uuidString)")
+        let restoreTargetDir = fm.temporaryDirectory.appendingPathComponent("BifrostCheck-savebackup-restoretarget-\(UUID().uuidString)")
+        assertUnderTempDir(fixtureSaveDir, label: "save backup fixtureSaveDir")
+        assertUnderTempDir(fixtureBackupsDir, label: "save backup fixtureBackupsDir")
+        assertUnderTempDir(restoreTargetDir, label: "save backup restoreTargetDir")
+        defer {
+            try? fm.removeItem(at: fixtureSaveDir)
+            try? fm.removeItem(at: fixtureBackupsDir)
+            try? fm.removeItem(at: restoreTargetDir)
+        }
+
+        let worldDB = fixtureSaveDir.appendingPathComponent("worlds_local/World1.db")
+        let worldFWL = fixtureSaveDir.appendingPathComponent("worlds_local/World1.fwl")
+        let characterFCH = fixtureSaveDir.appendingPathComponent("characters_local/Hero1.fch")
+        do {
+            for url in [worldDB, worldFWL, characterFCH] {
+                try fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            }
+            try Data("world1-db-content".utf8).write(to: worldDB)
+            try Data("world1-fwl-content".utf8).write(to: worldFWL)
+            try Data("hero1-fch-content".utf8).write(to: characterFCH)
+        } catch {
+            print("skipped: could not build fixture save dir: \(error)")
+            return
+        }
+        print("fixture: fake save dir \(fixtureSaveDir.path) (worlds_local: 2 files, characters_local: 1 file)")
+        print("fixture: fake backups dir \(fixtureBackupsDir.path)")
+
+        let backup = SaveBackup(saveDir: fixtureSaveDir, backupsDir: fixtureBackupsDir)
+
+        print("")
+        print("1) backupNow(reason: \"manual\") — creates a zip with the expected entries:")
+        var manualBackup: SaveBackup.Backup?
+        do {
+            let outcome = try await backup.backupNow(reason: SaveBackup.manualReason)
+            guard case .created(let summary) = outcome else {
+                print("  FAILED: expected .created, got \(outcome)")
+                return
+            }
+            let fileCountOK = summary.fileCount == 3
+            let sizeOK = summary.byteSize > 0
+            print("  fileCount=\(summary.fileCount) (expect 3) byteSize=\(summary.byteSize) -> fileCount-ok=\(fileCountOK) size-ok=\(sizeOK)")
+
+            let listResult = try? await ShellRunner.run("/usr/bin/unzip", ["-Z1", summary.url.path])
+            let entries = Set((listResult?.stdout ?? "").split(separator: "\n").map(String.init))
+            let expectedEntries = ["worlds_local/World1.db", "worlds_local/World1.fwl", "characters_local/Hero1.fch"]
+            let entriesOK = expectedEntries.allSatisfy(entries.contains)
+            print("  zip entries: \(entries.sorted()) -> contains-expected=\(entriesOK)")
+
+            manualBackup = await backup.list().first { $0.reason == SaveBackup.manualReason }
+            print("  -> \((fileCountOK && sizeOK && entriesOK && manualBackup != nil) ? "PASS" : "FAIL")")
+        } catch {
+            print("  FAILED: \(error)")
+        }
+        guard let manualBackup else {
+            print("ABORT: no manual backup to continue from")
+            return
+        }
+
+        print("")
+        print("2) pruning — 17 automatic backups collapse to \(SaveBackup.autoRetentionCount), manual survives:")
+        for i in 0..<17 {
+            _ = try? await backup.backupNow(reason: "auto-\(i)")
+        }
+        let afterPruning = await backup.list()
+        let automaticCount = afterPruning.filter { $0.reason != SaveBackup.manualReason }.count
+        let manualCount = afterPruning.filter { $0.reason == SaveBackup.manualReason }.count
+        let physicalCount = (try? fm.contentsOfDirectory(atPath: fixtureBackupsDir.path).count) ?? -1
+        let pruningOK = automaticCount == SaveBackup.autoRetentionCount && manualCount == 1 && physicalCount == afterPruning.count
+        print("  automatic=\(automaticCount) (expect \(SaveBackup.autoRetentionCount)) manual=\(manualCount) (expect 1) files-on-disk=\(physicalCount) listed=\(afterPruning.count)")
+        print("  -> \(pruningOK ? "PASS" : "FAIL")")
+
+        print("")
+        print("3) restore into a second temp dir — byte-identical files + a pre-restore safety zip:")
+        let oldWorld = restoreTargetDir.appendingPathComponent("worlds_local/OldWorld.db")
+        let oldCharacter = restoreTargetDir.appendingPathComponent("characters_local/OldHero.fch")
+        var restoreOK = false
+        do {
+            for url in [oldWorld, oldCharacter] {
+                try fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            }
+            try Data("old-world-content".utf8).write(to: oldWorld)
+            try Data("old-hero-content".utf8).write(to: oldCharacter)
+
+            let preRestoreCountBefore = await backup.list().filter { $0.reason == "pre-restore" }.count
+
+            let summary = try await backup.restore(backup: manualBackup, into: restoreTargetDir, isGameRunning: { false })
+
+            let restoredWorldDBOK = await filesIdentical(worldDB, restoreTargetDir.appendingPathComponent("worlds_local/World1.db"))
+            let restoredWorldFWLOK = await filesIdentical(worldFWL, restoreTargetDir.appendingPathComponent("worlds_local/World1.fwl"))
+            let restoredCharacterOK = await filesIdentical(characterFCH, restoreTargetDir.appendingPathComponent("characters_local/Hero1.fch"))
+            let oldFilesUntouched = fm.fileExists(atPath: oldWorld.path) && fm.fileExists(atPath: oldCharacter.path)
+
+            let preRestoreCountAfter = await backup.list().filter { $0.reason == "pre-restore" }.count
+            let safetyBackupCreated = preRestoreCountAfter == preRestoreCountBefore + 1
+
+            // worlds_local now has World1.db + World1.fwl + OldWorld.db = 3;
+            // characters_local now has Hero1.fch + OldHero.fch = 2.
+            let fileCountOK = summary.fileCount == 5
+
+            restoreOK = restoredWorldDBOK && restoredWorldFWLOK && restoredCharacterOK && oldFilesUntouched && safetyBackupCreated && fileCountOK
+            print("  World1.db byte-identical: \(restoredWorldDBOK), World1.fwl byte-identical: \(restoredWorldFWLOK), Hero1.fch byte-identical: \(restoredCharacterOK)")
+            print("  pre-existing files in target dir left in place (merge, not wipe): \(oldFilesUntouched)")
+            print("  pre-restore safety zip created: \(safetyBackupCreated) (count \(preRestoreCountBefore) -> \(preRestoreCountAfter))")
+            print("  restore() reported fileCount=\(summary.fileCount) (expect 5, the merged total)")
+            print("  -> \(restoreOK ? "PASS" : "FAIL")")
+        } catch {
+            print("  FAILED: \(error)")
+        }
+
+        print("")
+        print("4) running-game refusal — both paths of the injectable closure:")
+        var refusalOK = false
+        do {
+            _ = try await backup.restore(backup: manualBackup, into: restoreTargetDir, isGameRunning: { true })
+            print("  restore() with isGameRunning:{true} unexpectedly succeeded")
+        } catch SaveBackup.SaveBackupError.gameRunning {
+            refusalOK = true
+            print("  restore() with isGameRunning:{true} correctly refused with .gameRunning")
+        } catch {
+            print("  restore() with isGameRunning:{true} failed with unexpected error: \(error)")
+        }
+        let allowedPathAlreadyProven = restoreOK
+        print("  isGameRunning:{false} path already exercised and verified in step 3 above: \(allowedPathAlreadyProven)")
+        print("  -> \((refusalOK && allowedPathAlreadyProven) ? "PASS" : "FAIL")")
+
+        print("")
+        print("5) (read-only) real Valheim save dir:")
+        let realSaveDir = SaveBackup.defaultSaveDir
+        let realDirExists = fm.fileExists(atPath: realSaveDir.path)
+        print("  \(realSaveDir.path) exists: \(realDirExists)")
+        if realDirExists {
+            for subdir in SaveBackup.savedSubdirectories {
+                let subdirURL = realSaveDir.appendingPathComponent(subdir)
+                guard fm.fileExists(atPath: subdirURL.path) else { continue }
+                let count = (try? fm.contentsOfDirectory(atPath: subdirURL.path).count) ?? 0
+                print("  \(subdir): \(count) entrie(s)")
+            }
+        }
+    }
+
+    /// Byte-for-byte comparison of two files via `diff`, used to verify a
+    /// restored file exactly reproduces the original it was backed up
+    /// from.
+    private static func filesIdentical(_ a: URL, _ b: URL) async -> Bool {
+        (try? await ShellRunner.run("/usr/bin/diff", [a.path, b.path]))?.status == 0
     }
 }
