@@ -1,0 +1,124 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:Bifrost.ViewModels"
+        x:Class="Bifrost.Views.ConfigEditorWindow"
+        x:DataType="vm:ConfigEditorViewModel"
+        Title="{Binding Title}"
+        Width="640" Height="580" MinWidth="480" MinHeight="360"
+        WindowStartupLocation="CenterOwner">
+    <Grid RowDefinitions="Auto,Auto,*,Auto">
+
+        <!-- Header -->
+        <Grid Grid.Row="0" ColumnDefinitions="*,Auto" Margin="16,16,16,8">
+            <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                <TextBlock Text="{Binding Title}" FontSize="18" FontWeight="SemiBold" VerticalAlignment="Center" />
+                <Border Background="{DynamicResource BifrostAccentBrush}" CornerRadius="4" Padding="6,2" IsVisible="{Binding IsDirty}">
+                    <TextBlock Text="Unsaved" FontSize="11" Foreground="White" />
+                </Border>
+            </StackPanel>
+            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
+                <Button Content="Reveal in Explorer" Click="OnRevealClick" />
+                <Button Content="Revert" Command="{Binding RevertCommand}" />
+                <Button Content="Save" Command="{Binding SaveCommand}" />
+                <Button Content="Close" Click="OnCloseClick" />
+            </StackPanel>
+        </Grid>
+
+        <!-- Banners -->
+        <StackPanel Grid.Row="1" Margin="16,0,16,8" Spacing="4">
+            <Border Background="#332E9E45" Padding="10" CornerRadius="4" IsVisible="{Binding ValheimRunning}">
+                <TextBlock TextWrapping="Wrap"
+                           Text="Valheim is running — changes are saved to the file, but the game only reads configs at startup, so they take effect next launch. Some mods rewrite their config on exit and may overwrite what you save now." />
+            </Border>
+            <Border Background="#334C8DFF" Padding="10" CornerRadius="4" IsVisible="{Binding ExternalChangeDetected}">
+                <TextBlock TextWrapping="Wrap"
+                           Text="This file changed on disk (the game may have rewritten it). Your unsaved edits will be re-applied on top when you save." />
+            </Border>
+        </StackPanel>
+
+        <!-- Content -->
+        <Grid Grid.Row="2">
+            <TextBlock Text="{Binding LoadError}" IsVisible="{Binding HasLoadError}"
+                       Foreground="IndianRed" Margin="16" TextWrapping="Wrap" />
+
+            <ScrollViewer IsVisible="{Binding !HasLoadError}">
+                <ItemsControl ItemsSource="{Binding Sections}" Margin="16,0,16,16">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate DataType="vm:ConfigSectionViewModel">
+                            <StackPanel Margin="0,12,0,0" Spacing="10">
+                                <TextBlock Text="{Binding Name}" FontWeight="Bold" FontSize="14" />
+                                <ItemsControl ItemsSource="{Binding Rows}">
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate DataType="vm:ConfigEntryRowViewModel">
+                                            <Border Padding="0,8" BorderBrush="#22808080" BorderThickness="0,0,0,1">
+                                                <StackPanel Spacing="4">
+
+                                                    <!-- Boolean: checkbox -->
+                                                    <CheckBox Content="{Binding Key}" IsChecked="{Binding CurrentBool}" IsVisible="{Binding IsCheckbox}" />
+
+                                                    <!-- Enumerated: combo -->
+                                                    <Grid ColumnDefinitions="160,*" IsVisible="{Binding IsCombo}">
+                                                        <TextBlock Grid.Column="0" Text="{Binding Key}" VerticalAlignment="Center" />
+                                                        <ComboBox Grid.Column="1" ItemsSource="{Binding AcceptableValues}" SelectedItem="{Binding CurrentValue}"
+                                                                  HorizontalAlignment="Left" MinWidth="140" />
+                                                    </Grid>
+
+                                                    <!-- KeyboardShortcut: prominent current-binding display + raw text entry -->
+                                                    <StackPanel Spacing="4" IsVisible="{Binding IsKeyboardShortcut}">
+                                                        <Grid ColumnDefinitions="*,Auto">
+                                                            <TextBlock Grid.Column="0" Text="{Binding Key}" VerticalAlignment="Center" />
+                                                            <Border Grid.Column="1" Background="#22808080" CornerRadius="4" Padding="8,3">
+                                                                <TextBlock Text="{Binding KeyboardShortcutDisplay}" FontWeight="SemiBold" FontFamily="Consolas,Menlo,monospace" />
+                                                            </Border>
+                                                        </Grid>
+                                                        <TextBox Text="{Binding CurrentValue}" PlaceholderText="e.g. H + LeftShift" />
+                                                    </StackPanel>
+
+                                                    <!-- Everything else: plain text box (numerics included, no reformatting) -->
+                                                    <Grid ColumnDefinitions="160,*" IsVisible="{Binding IsPlainText}">
+                                                        <TextBlock Grid.Column="0" Text="{Binding Key}" VerticalAlignment="Center" />
+                                                        <TextBox Grid.Column="1" Text="{Binding CurrentValue}" />
+                                                    </Grid>
+
+                                                    <TextBlock Text="{Binding Description}" IsVisible="{Binding HasDescription}"
+                                                               Opacity="0.7" FontSize="11" TextWrapping="Wrap" />
+
+                                                    <Grid ColumnDefinitions="*,Auto">
+                                                        <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="10">
+                                                            <TextBlock Text="{Binding DefaultCaption}" IsVisible="{Binding HasDefaultCaption}" Opacity="0.5" FontSize="10" />
+                                                            <TextBlock Text="{Binding RangeCaption}" IsVisible="{Binding HasRangeCaption}" Opacity="0.5" FontSize="10" />
+                                                        </StackPanel>
+                                                        <Button Grid.Column="1" Content="Reset to Default" IsVisible="{Binding ShowReset}"
+                                                                Command="{Binding ResetToDefaultCommand}" FontSize="10" Padding="6,2" />
+                                                    </Grid>
+                                                </StackPanel>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </StackPanel>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </ScrollViewer>
+        </Grid>
+
+        <!-- Status line -->
+        <TextBlock Grid.Row="3" Text="{Binding StatusLine}" Opacity="0.75" Margin="16,4,16,12" TextWrapping="Wrap" />
+
+        <!-- Discard-changes confirmation overlay -->
+        <Border Grid.Row="0" Grid.RowSpan="4" Background="#CC000000" IsVisible="{Binding IsConfirmingClose}">
+            <Border Background="{DynamicResource BifrostSidebarBrush}" CornerRadius="8" Padding="20" Width="360"
+                    HorizontalAlignment="Center" VerticalAlignment="Center">
+                <StackPanel Spacing="12">
+                    <TextBlock Text="Discard unsaved changes?" FontWeight="SemiBold" />
+                    <TextBlock Text="You have unsaved edits to this config file." TextWrapping="Wrap" Opacity="0.8" />
+                    <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right">
+                        <Button Content="Cancel" Command="{Binding CancelCloseCommand}" />
+                        <Button Content="Discard Changes" Command="{Binding ConfirmDiscardCloseCommand}" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+        </Border>
+    </Grid>
+</Window>

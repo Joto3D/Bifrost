@@ -1,3 +1,4 @@
+using System.Collections.ObjectModel;
 using Bifrost.Core.Models;
 using CommunityToolkit.Mvvm.ComponentModel;
 
@@ -26,5 +27,25 @@ public partial class InstalledModRowViewModel : ObservableObject
     [ObservableProperty]
     private bool _enabled = true;
 
+    /// <summary>This mod's associated <c>.cfg</c> file (see <c>BepInExConfig.Associate</c>), if one was found — populated by <c>InstalledViewModel.RefreshAsync</c>.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasConfig))]
+    private string? _configPath;
+    public bool HasConfig => ConfigPath is not null;
+
+    /// <summary>This mod's <c>KeyboardShortcut</c> entries from its associated config, as "Key: Value" chips.</summary>
+    public ObservableCollection<string> Keybinds { get; } = new();
+    public bool HasKeybinds => Keybinds.Count > 0;
+
     partial void OnLatestVersionChanged(string? value) => OnPropertyChanged(nameof(UpdateAvailable));
+
+    public void SetKeybinds(IEnumerable<string> keybinds)
+    {
+        Keybinds.Clear();
+        foreach (var keybind in keybinds)
+        {
+            Keybinds.Add(keybind);
+        }
+        OnPropertyChanged(nameof(HasKeybinds));
+    }
 }

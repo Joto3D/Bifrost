@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using Bifrost.Core.Models;
+using Bifrost.Core.Services;
 using Bifrost.Services;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -62,11 +63,61 @@ public partial class InstalledViewModel : ViewModelBase
                 };
                 Mods.Add(row);
             }
+
+            LoadConfigAssociations(byFullName);
+
             StatusMessage = $"{Mods.Count} mod(s) installed.";
         }
         finally
         {
             IsBusy = false;
+        }
+    }
+
+    /// <summary>
+    /// Discovers every <c>.cfg</c> under <c>BepInEx/config</c>, associates
+    /// each with an installed mod (<see cref="BepInExConfig.Associate"/>,
+    /// using both the mod's full name and the Thunderstore index's display
+    /// name as match candidates), and parses each associated file's
+    /// <c>KeyboardShortcut</c> entries for the row-level chips. Mirrors the
+    /// macOS app's InstalledModsView.loadConfigs().
+    /// </summary>
+    private void LoadConfigAssociations(Dictionary<string, ThunderstorePackage> byFullName)
+    {
+        var gameDir = _services.LocateGameDir();
+        if (gameDir is null)
+        {
+            foreach (var row in Mods)
+            {
+                row.ConfigPath = null;
+                row.SetKeybinds(Array.Empty<string>());
+            }
+            return;
+        }
+
+        var candidates = Mods
+            .Select(row => (FullName: row.FullName, Name: byFullName.TryGetValue(row.FullName, out var package) ? package.Name : ""))
+            .ToList();
+        var configDir = Path.Combine(gameDir, "BepInEx", "config");
+        var configs = BepInExConfig.DiscoverConfigs(configDir, candidates);
+        var configByFullName = configs
+            .Where(c => c.AssociatedFullName is not null)
+            .ToDictionary(c => c.AssociatedFullName!);
+
+        foreach (var row in Mods)
+        {
+            if (!configByFullName.TryGetValue(row.FullName, out var config))
+            {
+                row.ConfigPath = null;
+                row.SetKeybinds(Array.Empty<string>());
+                continue;
+            }
+
+            row.ConfigPath = config.FilePath;
+            var text = BepInExConfig.ReadTextOrNull(config.FilePath);
+            row.SetKeybinds(text is null
+                ? Array.Empty<string>()
+                : BepInExConfig.Parse(text).KeyboardShortcuts.Select(entry => $"{entry.Key}: {entry.RawValue}"));
         }
     }
 

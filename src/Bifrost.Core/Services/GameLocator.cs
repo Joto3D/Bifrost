@@ -114,6 +114,24 @@ public sealed class GameLocator
         }
     }
 
+    /// <summary>
+    /// Whether Valheim itself is currently running — the config editor
+    /// polls this to show a "changes apply next launch" notice, since the
+    /// game only reads <c>.cfg</c> files at startup. Mirrors the macOS
+    /// reference implementation's <c>pgrep -x Valheim</c> check.
+    /// </summary>
+    public static bool ValheimIsRunning()
+    {
+        try
+        {
+            return System.Diagnostics.Process.GetProcessesByName("valheim").Length > 0;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     private static string? TryReadAllText(string path)
     {
         try

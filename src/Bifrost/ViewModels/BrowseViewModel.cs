@@ -19,6 +19,9 @@ public partial class BrowseViewModel : ViewModelBase
     private readonly AppServices _services;
     private List<ThunderstorePackage> _index = new();
 
+    /// <summary>Exposed so the view can construct the package-detail dialog against the same service instances.</summary>
+    public AppServices Services => _services;
+
     /// <summary>Raised after an install completes, so other tabs can refresh.</summary>
     public event Func<Task>? ModsChanged;
 

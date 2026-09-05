@@ -32,9 +32,12 @@
                                 <Run Text="  updated " /><Run Text="{Binding DateUpdated}" />
                             </TextBlock>
                         </StackPanel>
-                        <Button Grid.Column="1" Content="Install" VerticalAlignment="Center"
-                                Command="{Binding $parent[ListBox].((vm:BrowseViewModel)DataContext).InstallCommand}"
-                                CommandParameter="{Binding}" />
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
+                            <Button Content="Details..." Click="OnDetailsClick" />
+                            <Button Content="Install"
+                                    Command="{Binding $parent[ListBox].((vm:BrowseViewModel)DataContext).InstallCommand}"
+                                    CommandParameter="{Binding}" />
+                        </StackPanel>
                     </Grid>
                 </DataTemplate>
             </ListBox.ItemTemplate>

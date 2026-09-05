@@ -40,4 +40,50 @@ public partial class InstalledView : UserControl
             window.Show();
         }
     }
+
+    private void OnManageConfigsClick(object? sender, RoutedEventArgs e)
+    {
+        if (DataContext is not InstalledViewModel vm)
+        {
+            return;
+        }
+
+        var window = new ConfigsListWindow
+        {
+            DataContext = new ConfigsListViewModel(vm.Services),
+        };
+
+        var topLevel = TopLevel.GetTopLevel(this);
+        if (topLevel is Window owner)
+        {
+            window.ShowDialog(owner);
+        }
+        else
+        {
+            window.Show();
+        }
+    }
+
+    private void OnEditConfigClick(object? sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { DataContext: InstalledModRowViewModel row } || row.ConfigPath is null)
+        {
+            return;
+        }
+
+        var window = new ConfigEditorWindow
+        {
+            DataContext = new ConfigEditorViewModel(row.ConfigPath, row.FullName),
+        };
+
+        var topLevel = TopLevel.GetTopLevel(this);
+        if (topLevel is Window owner)
+        {
+            window.ShowDialog(owner);
+        }
+        else
+        {
+            window.Show();
+        }
+    }
 }

@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Bifrost.Core.Models;
 
 namespace Bifrost.Core.Services;
@@ -50,6 +51,9 @@ public static class SelfTest
 
         Section(output, "Manifest JSON shape compatibility (real macOS manifest.json, read-only)");
         CheckManifestShapeCompatibility(output);
+
+        Section(output, "Config editor (BepInExConfig parser/writer, keyed apply, association, README)");
+        await CheckConfigEditorAsync(output);
 
         output.WriteLine();
         output.WriteLine(_anyFailure ? "== One or more checks FAILED ==" : "== All checks PASSED ==");
@@ -584,6 +588,372 @@ public static class SelfTest
         catch (Exception ex)
         {
             Report(output, "manifest shape compatibility", false, ex.Message);
+        }
+    }
+
+    // MARK: - Config editor
+
+    private const string RealValheimConfigDirEnvVar = "BIFROST_CHECK_REAL_VALHEIM_CONFIG_DIR";
+
+    /// <summary>
+    /// Where this Mac dev machine's own real Valheim install keeps its
+    /// BepInEx <c>.cfg</c> files — used only to pull realistic, real-world
+    /// fixtures for the parser round-trip sweep below. Read-only: every
+    /// file under here is copied to a temp directory before anything
+    /// touches it, and the originals are never written to. Not the Windows
+    /// game directory <see cref="GameLocator"/> resolves — this machine has
+    /// no Windows Steam install to locate; overridable via
+    /// <see cref="RealValheimConfigDirEnvVar"/> for anyone running this
+    /// suite against a different real Valheim install.
+    /// </summary>
+    private static string RealValheimConfigDir =>
+        Environment.GetEnvironmentVariable(RealValheimConfigDirEnvVar)
+        ?? Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            "Library", "Application Support", "Steam", "steamapps", "common", "Valheim", "BepInEx", "config");
+
+    /// <summary>
+    /// Exercises <see cref="BepInExConfig"/> — the parser/writer that backs
+    /// the config editor UI — against embedded fixtures and, read-only
+    /// (copied to temp first, originals never touched), every real
+    /// <c>.cfg</c> file under <see cref="RealValheimConfigDir"/>. Mirrors
+    /// the macOS reference implementation's <c>DebugCheck.checkConfigEditor</c>
+    /// section, including its later hardening-pass additions (keyed apply,
+    /// CRLF tolerance).
+    /// </summary>
+    private static async Task CheckConfigEditorAsync(TextWriter output)
+    {
+        CheckConfigRoundTripSweep(output);
+        CheckCrlfRoundTrip(output);
+        CheckSingleChangeDiff(output);
+        CheckKeyedApplication(output);
+        CheckResetToDefault(output);
+        CheckAssociationHeuristic(output);
+        await CheckReadmeFetchAsync(output);
+    }
+
+    /// <summary>
+    /// For every real <c>.cfg</c> under <see cref="RealValheimConfigDir"/>
+    /// (temp copy only): parses it, cross-checks the entry count against an
+    /// independent regex baseline (<c>^[^#\[].* = </c> — any non-comment,
+    /// non-section-header line containing " = ", i.e. every <c>Key = value</c>
+    /// line BepInEx's own format can produce), and verifies a zero-change
+    /// round trip is byte-identical. A mismatched count means the parser
+    /// silently dropped (or double-counted) something real-world.
+    /// </summary>
+    private static void CheckConfigRoundTripSweep(TextWriter output)
+    {
+        var realConfigDir = RealValheimConfigDir;
+        List<string> cfgFiles;
+        try
+        {
+            cfgFiles = Directory.Exists(realConfigDir)
+                ? Directory.EnumerateFiles(realConfigDir, "*.cfg").OrderBy(f => f, StringComparer.OrdinalIgnoreCase).ToList()
+                : new List<string>();
+        }
+        catch
+        {
+            cfgFiles = new List<string>();
+        }
+
+        if (cfgFiles.Count == 0)
+        {
+            output.WriteLine($"SKIPPED: no real .cfg files found at {realConfigDir}");
+            return;
+        }
+
+        var tempDir = Path.Combine(Path.GetTempPath(), $"BifrostCheck-configsweep-{Guid.NewGuid()}");
+        Directory.CreateDirectory(tempDir);
+        try
+        {
+            var allPassed = true;
+            foreach (var realPath in cfgFiles)
+            {
+                var fileName = Path.GetFileName(realPath);
+                string originalText;
+                try
+                {
+                    originalText = File.ReadAllText(realPath);
+                }
+                catch (Exception ex)
+                {
+                    output.WriteLine($"  {fileName}: FAILED to read real file: {ex.Message}");
+                    allPassed = false;
+                    continue;
+                }
+
+                // Read-only against the real file — write a temp copy and
+                // never touch the original again.
+                File.WriteAllText(Path.Combine(tempDir, fileName), originalText);
+
+                var parsed = BepInExConfig.Parse(originalText);
+                var entryCount = parsed.AllEntries.Count();
+                // Line-by-line (like `grep`, which never sees other lines'
+                // bytes while matching one) rather than one Regex.Matches
+                // pass over the whole multiline text: a negated character
+                // class like [^#\[] matches ANY character not in that set —
+                // including '\n' — so applying it across the whole text
+                // with RegexOptions.Multiline lets a match that starts on
+                // an empty line "swallow" that line's newline and continue
+                // matching into the next line's content, silently
+                // inflating the count whenever a blank line precedes a
+                // comment that happens to contain " = " (e.g. a
+                // description line like "Higher number = more to the
+                // right"). Matching one line at a time sidesteps that
+                // entirely, since there's no adjacent line for the pattern
+                // to bleed into.
+                var baselineCount = originalText.Split('\n').Count(line => Regex.IsMatch(line, @"^[^#\[].* = "));
+
+                var roundTripped = BepInExConfig.Applying(new Dictionary<int, string>(), originalText);
+                var roundTripOk = roundTripped == originalText;
+                var countOk = baselineCount == entryCount;
+                var filePass = countOk && roundTripOk;
+                allPassed &= filePass;
+
+                output.WriteLine($"  {fileName}: parsed={entryCount} baseline={baselineCount} round-trip-identical={roundTripOk} -> {(filePass ? "PASS" : "FAIL")}");
+            }
+            Report(output, $"real .cfg round-trip sweep ({cfgFiles.Count} file(s), read-only source, temp copies only)", allPassed);
+        }
+        finally
+        {
+            TryDelete(tempDir);
+        }
+    }
+
+    /// <summary>
+    /// None of this developer's real <c>.cfg</c> files use CRLF line
+    /// endings, but Windows' own are routinely CRLF, and <c>Parse</c>
+    /// splits on <c>'\n'</c> alone — which would leave a dangling
+    /// <c>'\r'</c> on every line if trimming didn't strip it, corrupting
+    /// section names, keys, and values alike (exactly the bug the macOS
+    /// port's own hardening pass had to fix). Embedded fixture, since a
+    /// real CRLF file isn't available on this machine to test against.
+    /// </summary>
+    private static void CheckCrlfRoundTrip(TextWriter output)
+    {
+        const string crlfText = "[General]\r\n\r\n## A CRLF-terminated description.\r\n# Setting type: Boolean\r\n# Default value: false\r\nEnabled = true\r\n";
+        var parsed = BepInExConfig.Parse(crlfText);
+        var entry = parsed.AllEntries.FirstOrDefault(e => e.Key == "Enabled");
+
+        var sectionOk = parsed.Sections.FirstOrDefault()?.Name == "General";
+        var keyOk = entry?.Key == "Enabled";
+        var valueOk = entry?.RawValue == "true";
+        var boolValueOk = entry?.BoolValue == true;
+        var descriptionOk = entry?.Description == "A CRLF-terminated description.";
+        Report(output, "CRLF fixture: section/key/value/boolValue/description survive a CRLF split with no stray \\r",
+            sectionOk && keyOk && valueOk && boolValueOk && descriptionOk,
+            $"section={parsed.Sections.FirstOrDefault()?.Name} key={entry?.Key} value={entry?.RawValue} boolValue={entry?.BoolValue} description={entry?.Description}");
+
+        var noOpRoundTrip = BepInExConfig.Applying(new Dictionary<int, string>(), crlfText);
+        Report(output, "CRLF fixture: byte-identical no-op round trip (line endings preserved)", noOpRoundTrip == crlfText);
+    }
+
+    /// <summary>Changing one entry's value and reapplying must produce exactly one changed line, leave every other entry untouched, and reread back correctly.</summary>
+    private static void CheckSingleChangeDiff(TextWriter output)
+    {
+        const string originalText = "[General]\n\n## The field of view to use.\n# Setting type: Single\n# Default value: 65\nDefault FOV = 65\n\nUnrelated = untouched\n";
+        var parsed = BepInExConfig.Parse(originalText);
+        var fovEntry = parsed.AllEntries.FirstOrDefault(e => e.Key == "Default FOV");
+        if (fovEntry is null)
+        {
+            Report(output, "single-change diff fixture parses \"Default FOV\"", false);
+            return;
+        }
+
+        var changedText = BepInExConfig.Applying(new Dictionary<int, string> { [fovEntry.LineIndex] = "75" }, originalText);
+        var changedLines = CountChangedLines(originalText, changedText);
+        var reparsed = BepInExConfig.Parse(changedText);
+        var rereadValue = reparsed.AllEntries.FirstOrDefault(e => e.Key == "Default FOV")?.RawValue;
+        var otherEntriesUntouched = reparsed.AllEntries.Where(e => e.Key != "Default FOV")
+            .SequenceEqual(parsed.AllEntries.Where(e => e.Key != "Default FOV"));
+
+        Report(output, "change one value: exactly 1 changed line, reread matches, everything else untouched",
+            changedLines == 1 && rereadValue == "75" && otherEntriesUntouched,
+            $"changedLines={changedLines} reread={rereadValue}");
+    }
+
+    /// <summary>
+    /// Exercises <c>BepInExConfig.Applying(IReadOnlyList&lt;KeyedChange&gt;, string)</c>
+    /// — the fix for the stale-write race where a mod rewrites its
+    /// <c>.cfg</c> on game exit between when the editor read the file and
+    /// when the user hits Save. Simulates that exact sequence: the editor
+    /// opens <c>originalText</c>, the user edits one setting, then — before
+    /// they save — an external rewrite (a) changes an unrelated setting's
+    /// value, (b) inserts a brand-new setting that didn't exist when the
+    /// editor opened (so line indices no longer line up at all), and (c)
+    /// removes a setting the user never touched but a stale second edit
+    /// still references. Asserts: the user's edit lands, both external
+    /// changes survive untouched, and the edit targeting the now-vanished
+    /// setting is reported as skipped rather than silently dropped or
+    /// crashing.
+    /// </summary>
+    private static void CheckKeyedApplication(TextWriter output)
+    {
+        const string originalText = """
+            [General]
+
+            ## The field of view to use while first person mode is active.
+            # Setting type: Single
+            # Default value: 65
+            Default FOV = 65
+
+            [Other]
+
+            ## Whether the feature is enabled.
+            # Setting type: Boolean
+            # Default value: false
+            Enabled = false
+
+            ## A setting that will vanish in the external rewrite below.
+            # Setting type: Boolean
+            # Default value: false
+            Temporary = false
+            """;
+
+        const string externallyRewrittenText = """
+            [General]
+
+            ## The field of view to use while first person mode is active.
+            # Setting type: Single
+            # Default value: 65
+            Default FOV = 65
+
+            [Other]
+
+            ## Whether the feature is enabled.
+            # Setting type: Boolean
+            # Default value: false
+            Enabled = true
+
+            ## Newly added by the mod itself on this run.
+            # Setting type: Boolean
+            # Default value: false
+            New Toggle = true
+            """;
+
+        var parsedOriginal = BepInExConfig.Parse(originalText);
+        var fovEntry = parsedOriginal.AllEntries.FirstOrDefault(e => e.Key == "Default FOV");
+        if (fovEntry is null)
+        {
+            Report(output, "keyed-apply fixture parses \"Default FOV\"", false);
+            return;
+        }
+
+        var userEdits = new List<BepInExConfig.KeyedChange>
+        {
+            new(fovEntry.Section, fovEntry.Key, "90"),
+            new("Other", "Temporary", "true"),
+        };
+
+        var result = BepInExConfig.Applying(userEdits, externallyRewrittenText);
+
+        var userEditLanded = result.Text.Contains("Default FOV = 90");
+        var externalValueChangeSurvived = result.Text.Contains("Enabled = true");
+        var externalInsertionSurvived = result.Text.Contains("New Toggle = true");
+        var vanishedKeyNotWritten = !result.Text.Contains("Temporary");
+        var skippedReportedCorrectly = result.Skipped.SequenceEqual(new[] { new BepInExConfig.KeyedChange("Other", "Temporary", "true") });
+        var reparsed = BepInExConfig.Parse(result.Text);
+        var otherEntriesUntouched = reparsed.AllEntries.Where(e => e.Key != "Default FOV")
+            .SequenceEqual(BepInExConfig.Parse(externallyRewrittenText).AllEntries.Where(e => e.Key != "Default FOV"));
+
+        Report(output, "keyed apply onto an externally-rewritten copy: user edit lands, external changes survive, vanished key skipped and reported",
+            userEditLanded && externalValueChangeSurvived && externalInsertionSurvived && vanishedKeyNotWritten && skippedReportedCorrectly && otherEntriesUntouched,
+            $"landed={userEditLanded} externalValue={externalValueChangeSurvived} externalInsert={externalInsertionSurvived} vanishedSkipped={vanishedKeyNotWritten} skipped=[{string.Join(",", result.Skipped.Select(s => $"{s.Section}/{s.Key}"))}] otherUntouched={otherEntriesUntouched}");
+    }
+
+    /// <summary>
+    /// The config editor's "Reset to Default" button just writes an
+    /// entry's own <c>DefaultValue</c> back via <c>BepInExConfig.Applying</c>
+    /// — exercised here against a small embedded fixture (not this
+    /// machine's real file, whose current value is whatever this developer
+    /// has it set to right now).
+    /// </summary>
+    private static void CheckResetToDefault(TextWriter output)
+    {
+        const string fixtureConfigText = """
+            [General]
+
+            ## The field of view to use while first person mode is active.
+            # Setting type: Single
+            # Default value: 65
+            Default FOV = 100
+            """;
+
+        var parsed = BepInExConfig.Parse(fixtureConfigText);
+        var fovEntry = parsed.AllEntries.FirstOrDefault(e => e.Key == "Default FOV");
+        if (fovEntry is null)
+        {
+            Report(output, "reset-to-default fixture parses \"Default FOV\"", false);
+            return;
+        }
+
+        var startsChanged = fovEntry.DefaultValue == "65" && fovEntry.RawValue == "100" && fovEntry.RawValue != fovEntry.DefaultValue;
+        var afterResetText = BepInExConfig.Applying(new Dictionary<int, string> { [fovEntry.LineIndex] = fovEntry.DefaultValue! }, fixtureConfigText);
+        var afterResetValue = BepInExConfig.Parse(afterResetText).AllEntries.FirstOrDefault(e => e.Key == "Default FOV")?.RawValue;
+
+        Report(output, "reset-to-default: writing the entry's own DefaultValue back restores it",
+            startsChanged && afterResetValue == fovEntry.DefaultValue,
+            $"default={fovEntry.DefaultValue} before={fovEntry.RawValue} after={afterResetValue}");
+    }
+
+    /// <summary>Filename/mod association heuristic, plus discovery against the real config dir (read-only).</summary>
+    private static void CheckAssociationHeuristic(TextWriter output)
+    {
+        var candidates = new List<(string FullName, string Name)> { ("Azumatt-FirstPersonMode", "First Person Mode") };
+        var matched = BepInExConfig.Associate("Azumatt.FirstPersonMode.cfg", candidates);
+        var unmatched = BepInExConfig.Associate("BepInEx.cfg", candidates);
+        Report(output, "association heuristic: filename matches FullName/Name, unrelated filename doesn't",
+            matched == "Azumatt-FirstPersonMode" && unmatched is null,
+            $"\"Azumatt.FirstPersonMode.cfg\" -> {matched ?? "null"}, \"BepInEx.cfg\" -> {unmatched ?? "null"}");
+
+        var realConfigDir = RealValheimConfigDir;
+        if (!Directory.Exists(realConfigDir))
+        {
+            output.WriteLine($"SKIPPED discoverConfigs (read-only) — no real config dir at {realConfigDir}");
+            return;
+        }
+        var discovered = BepInExConfig.DiscoverConfigs(realConfigDir, candidates);
+        var discoveredOk = discovered.Any(c => c.FileName == "Azumatt.FirstPersonMode.cfg" && c.AssociatedFullName == "Azumatt-FirstPersonMode")
+            && discovered.Any(c => c.FileName == "BepInEx.cfg" && c.AssociatedFullName is null);
+        Report(output, "discoverConfigs against the real config dir (read-only) associates the known file and leaves BepInEx.cfg unmatched", discoveredOk,
+            string.Join(", ", discovered.Select(c => $"{c.FileName}->{c.AssociatedFullName ?? "(unmatched)"}")));
+    }
+
+    /// <summary>
+    /// Fetches the loader pack's current version from Thunderstore's
+    /// package metadata endpoint, then its README from the experimental
+    /// <c>{owner}/{name}/{version}/readme/</c> endpoint — never a
+    /// hardcoded version, so this keeps working as the pack updates. Best
+    /// effort: skips gracefully rather than failing when offline.
+    /// </summary>
+    private static async Task CheckReadmeFetchAsync(TextWriter output)
+    {
+        try
+        {
+            const string metadataUrl = "https://thunderstore.io/api/experimental/package/denikson/BepInExPack_Valheim/";
+            using var http = new HttpClient();
+            var metaResponse = await http.GetAsync(metadataUrl);
+            if (!metaResponse.IsSuccessStatusCode)
+            {
+                output.WriteLine("SKIPPED: could not fetch package metadata (offline or API unavailable)");
+                return;
+            }
+            var metaJson = await metaResponse.Content.ReadAsStringAsync();
+            using var metaDoc = JsonDocument.Parse(metaJson);
+            var versionNumber = metaDoc.RootElement.GetProperty("latest").GetProperty("version_number").GetString();
+            if (string.IsNullOrEmpty(versionNumber))
+            {
+                output.WriteLine("SKIPPED: could not read latest version number from package metadata");
+                return;
+            }
+
+            var client = new ThunderstoreClient();
+            var markdown = await client.FetchReadmeAsync("denikson", "BepInExPack_Valheim", versionNumber);
+            Report(output, $"live README fetch: denikson-BepInExPack_Valheim@{versionNumber} returns non-empty markdown", markdown.Length > 0, $"length={markdown.Length}");
+        }
+        catch (Exception ex)
+        {
+            output.WriteLine($"SKIPPED: {ex.Message} (likely offline)");
         }
     }
 

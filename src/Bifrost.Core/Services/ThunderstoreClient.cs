@@ -132,6 +132,45 @@ public sealed class ThunderstoreClient
         return string.IsNullOrEmpty(icon) ? null : icon;
     }
 
+    /// <summary>
+    /// In-memory cache of fetched READMEs, keyed by "owner/name/version" so
+    /// revisiting a package's detail view within the same run doesn't
+    /// re-fetch a version whose README never changes. Shared across every
+    /// <see cref="ThunderstoreClient"/> instance (mirrors the macOS
+    /// reference implementation's process-wide <c>ReadmeCache</c> actor); a
+    /// <see cref="System.Collections.Concurrent.ConcurrentDictionary{TKey,TValue}"/>
+    /// is enough thread-safety for a simple string cache, no actor needed.
+    /// </summary>
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> ReadmeCache = new();
+
+    /// <summary>
+    /// Fetches a package version's README from Thunderstore's experimental
+    /// <c>{owner}/{name}/{version}/readme/</c> endpoint — a
+    /// <c>{"markdown": "..."}</c> JSON body (verified against the live
+    /// API) — caching the result per owner/name/version.
+    /// </summary>
+    public async Task<string> FetchReadmeAsync(string owner, string name, string version, CancellationToken cancellationToken = default)
+    {
+        var cacheKey = $"{owner}/{name}/{version}";
+        if (ReadmeCache.TryGetValue(cacheKey, out var cached))
+        {
+            return cached;
+        }
+
+        var url = $"https://thunderstore.io/api/experimental/package/{owner}/{name}/{version}/readme/";
+        using var response = await _http.GetAsync(url, cancellationToken);
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new ThunderstoreClientException($"README request failed with status {(int)response.StatusCode}");
+        }
+
+        var json = await response.Content.ReadAsStringAsync(cancellationToken);
+        using var document = JsonDocument.Parse(json);
+        var markdown = document.RootElement.TryGetProperty("markdown", out var markdownProperty) ? markdownProperty.GetString() ?? "" : "";
+        ReadmeCache[cacheKey] = markdown;
+        return markdown;
+    }
+
     private Validators? LoadValidators()
     {
         try

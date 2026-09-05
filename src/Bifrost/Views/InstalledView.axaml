@@ -11,12 +11,13 @@
             <TextBlock Text="{Binding LoaderVersion, StringFormat='BepInEx loader: {0}', FallbackValue='BepInEx loader: not installed'}" VerticalAlignment="Center" />
             <Button Content="Refresh" Command="{Binding RefreshCommand}" />
             <Button Content="Manage profiles..." Click="OnManageProfilesClick" />
+            <Button Content="Configs..." Click="OnManageConfigsClick" />
         </StackPanel>
 
         <ListBox Grid.Row="2" ItemsSource="{Binding Mods}">
             <ListBox.ItemTemplate>
                 <DataTemplate DataType="vm:InstalledModRowViewModel">
-                    <Grid ColumnDefinitions="Auto,*,Auto,Auto" Margin="0,4">
+                    <Grid ColumnDefinitions="Auto,*,Auto,Auto,Auto" Margin="0,4">
                         <CheckBox Grid.Column="0" IsChecked="{Binding Enabled}" VerticalAlignment="Center" />
                         <StackPanel Grid.Column="1" Spacing="2" Margin="8,0">
                             <TextBlock FontWeight="SemiBold">
@@ -25,12 +26,29 @@
                             </TextBlock>
                             <TextBlock Text="{Binding LatestVersion, StringFormat='Update available: {0}'}"
                                        IsVisible="{Binding UpdateAvailable}" Opacity="0.7" FontSize="11" />
+                            <ItemsControl ItemsSource="{Binding Keybinds}" IsVisible="{Binding HasKeybinds}">
+                                <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <WrapPanel />
+                                    </ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate x:DataType="x:String">
+                                        <Border Background="#22808080" CornerRadius="4" Padding="5,1" Margin="0,0,4,3">
+                                            <TextBlock Text="{Binding}" FontSize="10" />
+                                        </Border>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
                         </StackPanel>
-                        <Button Grid.Column="2" Content="Update" Margin="4,0"
+                        <Button Grid.Column="2" Content="Config" Margin="4,0"
+                                IsVisible="{Binding HasConfig}"
+                                Click="OnEditConfigClick" />
+                        <Button Grid.Column="3" Content="Update" Margin="4,0"
                                 IsVisible="{Binding UpdateAvailable}"
                                 Command="{Binding $parent[ListBox].((vm:InstalledViewModel)DataContext).UpdateCommand}"
                                 CommandParameter="{Binding}" />
-                        <Button Grid.Column="3" Content="Remove"
+                        <Button Grid.Column="4" Content="Remove"
                                 Command="{Binding $parent[ListBox].((vm:InstalledViewModel)DataContext).RemoveCommand}"
                                 CommandParameter="{Binding}" />
                     </Grid>
