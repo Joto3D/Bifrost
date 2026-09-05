@@ -23,6 +23,14 @@ struct StatusPanel: View {
     @State private var diagnosticsTask: Task<Void, Never>?
     @State private var launchTask: Task<Void, Never>?
     @State private var isLaunching = false
+    /// Set once per launch (see `play(modded:)`) so `Flavor.quip` shows the
+    /// same secondary caption across that launch's phase updates instead of
+    /// re-rolling on every status change.
+    @State private var launchFlavorSeed: Int?
+    /// Incremented once each time a modded launch's diagnostics confirm
+    /// plugins loaded — drives the Play button area's one-time aurora
+    /// shimmer (see `View.auroraCelebration`).
+    @State private var celebrationPulse = 0
 
     @State private var thunderstoreClient = ThunderstoreClient()
     @State private var isApplyingProfile = false
@@ -44,6 +52,8 @@ struct StatusPanel: View {
         VStack(spacing: Theme.Spacing.xl) {
             titleRow
 
+            RunestoneTipCard()
+
             statusGrid
 
             VStack(spacing: Theme.Spacing.s) {
@@ -56,6 +66,8 @@ struct StatusPanel: View {
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
+
+            SagaCard()
 
             Spacer(minLength: 0)
 
@@ -316,25 +328,38 @@ struct StatusPanel: View {
                 .foregroundStyle(.secondary)
 
             if let launchStatusLine {
-                HStack(spacing: 8) {
-                    if isLaunching {
-                        ProgressView()
-                            .controlSize(.small)
-                    }
-                    Text(launchStatusLine)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    if isLaunching {
-                        Button("Cancel", action: cancelLaunch)
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 8) {
+                        if isLaunching {
+                            ProgressView()
+                                .controlSize(.small)
+                        }
+                        Text(launchStatusLine)
                             .font(.caption)
-                            .buttonStyle(.plain)
-                            .foregroundStyle(.blue)
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        if isLaunching {
+                            Button("Cancel", action: cancelLaunch)
+                                .font(.caption)
+                                .buttonStyle(.plain)
+                                .foregroundStyle(.blue)
+                        }
+                    }
+                    // The real status line above always stays primary — this
+                    // is purely decorative flavor text alongside it (see
+                    // `Flavor`), shown only while a launch is actually
+                    // in-flight.
+                    if isLaunching, let launchFlavorSeed {
+                        Text(Flavor.quip(seed: launchFlavorSeed))
+                            .font(.caption2)
+                            .italic()
+                            .foregroundStyle(.tertiary)
                     }
                 }
                 .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
+        .auroraCelebration(trigger: celebrationPulse)
     }
 
     private var lastBackupCaption: String {
@@ -449,6 +474,7 @@ struct StatusPanel: View {
         diagnosticsTask?.cancel()
         isLaunching = true
         launchStatusLine = nil
+        launchFlavorSeed = Int(Date().timeIntervalSince1970)
 
         launchTask = Task {
             await runLaunch(modded: modded)
@@ -479,6 +505,9 @@ struct StatusPanel: View {
             let diagnosis = await Diagnostics.watch(gameDir: gameDir, modded: modded)
             if Task.isCancelled { return }
             launchStatusLine = diagnosis.summary
+            if case .modsLoaded = diagnosis {
+                celebrationPulse += 1
+            }
         }
     }
 

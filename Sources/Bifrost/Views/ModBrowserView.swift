@@ -34,9 +34,24 @@ struct ModBrowserView: View {
             detail
         }
         .searchable(text: $searchText, prompt: "Search mods")
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                SurpriseMeButton(action: rollSurpriseMe)
+            }
+        }
         .task {
             await loadIndex(force: false)
         }
+    }
+
+    /// Picks a random well-rated, not-yet-installed mod (`SurpriseMe.pick`)
+    /// and selects it, so the detail pane opens on it the same way clicking
+    /// a row would. A no-op if the index hasn't finished loading yet or
+    /// nothing currently qualifies.
+    private func rollSurpriseMe() {
+        guard case .loaded(let packages) = loadState else { return }
+        guard let pick = SurpriseMe.pick(index: packages, manifest: appState.manifest) else { return }
+        selectedPackageID = pick.id
     }
 
     @ViewBuilder
