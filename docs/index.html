@@ -1,0 +1,611 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bifrost — Valheim mods made easy</title>
+<meta name="description" content="Bifrost is a friendly Valheim mod launcher for Mac and Windows. One-click mods from Thunderstore and Nexus, profiles, automatic save backups, and safe multiplayer.">
+<style>
+  :root{
+    --bg-0:#080b18;
+    --bg-1:#0d1128;
+    --bg-2:#131a3a;
+    --panel:#141a36;
+    --panel-border:#2a3468;
+    --text-0:#f4f6ff;
+    --text-1:#c7cdf0;
+    --text-2:#8d94c4;
+    --accent-a:#7dd3fc;
+    --accent-b:#a78bfa;
+    --accent-c:#f472b6;
+    --accent-d:#34d399;
+    --accent-e:#fbbf24;
+    --focus:#8ab4ff;
+    --card-mac:#1a2244;
+    --card-win:#1a2244;
+    --pill-bg:#1c2450;
+  }
+
+  *{ box-sizing:border-box; }
+  html{ -webkit-text-size-adjust:100%; }
+  body{
+    margin:0;
+    background:var(--bg-0);
+    color:var(--text-0);
+    font-family:-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    line-height:1.5;
+    overflow-x:hidden;
+  }
+
+  a{ color:inherit; }
+
+  .wrap{
+    max-width:920px;
+    margin:0 auto;
+    padding:0 20px;
+  }
+
+  /* ---------- Aurora background ---------- */
+  .aurora-stage{
+    position:relative;
+    overflow:hidden;
+    background:
+      radial-gradient(ellipse 120% 60% at 50% -10%, #1b2456 0%, transparent 60%),
+      linear-gradient(180deg, var(--bg-1) 0%, var(--bg-0) 100%);
+    padding-top:56px;
+    padding-bottom:64px;
+  }
+  .aurora-svg{
+    position:absolute;
+    top:-10%;
+    left:50%;
+    transform:translateX(-50%);
+    width:180%;
+    max-width:1600px;
+    height:auto;
+    opacity:0.55;
+    filter:blur(2px);
+    pointer-events:none;
+    z-index:0;
+  }
+  @media (prefers-reduced-motion: no-preference){
+    .aurora-band{ animation: drift 16s ease-in-out infinite alternate; }
+    .aurora-band.b2{ animation-duration:20s; animation-delay:-4s; }
+    .aurora-band.b3{ animation-duration:24s; animation-delay:-9s; }
+  }
+  @keyframes drift{
+    from{ transform: translateX(-2%) translateY(0px) scaleY(1); }
+    to{ transform: translateX(2%) translateY(10px) scaleY(1.05); }
+  }
+
+  .hero{
+    position:relative;
+    z-index:1;
+    text-align:center;
+  }
+
+  .logo{
+    width:96px;
+    height:96px;
+    margin:0 auto 18px;
+    display:block;
+  }
+
+  h1{
+    font-size:clamp(1.7rem, 6vw, 2.6rem);
+    line-height:1.15;
+    margin:0 0 12px;
+    font-weight:800;
+    letter-spacing:-0.02em;
+  }
+  h1 .grad{
+    background:linear-gradient(90deg, var(--accent-a), var(--accent-b), var(--accent-c));
+    -webkit-background-clip:text;
+    background-clip:text;
+    color:transparent;
+  }
+
+  .tagline{
+    font-size:clamp(1rem, 3.4vw, 1.2rem);
+    color:var(--text-1);
+    max-width:560px;
+    margin:0 auto 34px;
+    padding:0 8px;
+  }
+
+  /* ---------- Download buttons ---------- */
+  .downloads{
+    display:flex;
+    flex-wrap:wrap;
+    gap:16px;
+    justify-content:center;
+    margin:0 auto 14px;
+    padding:0 4px;
+  }
+
+  .dl-btn{
+    position:relative;
+    display:flex;
+    align-items:center;
+    gap:14px;
+    text-decoration:none;
+    width:100%;
+    max-width:330px;
+    padding:16px 20px;
+    border-radius:16px;
+    background:var(--panel);
+    border:1.5px solid var(--panel-border);
+    color:var(--text-0);
+    transition:transform .15s ease, border-color .15s ease, box-shadow .15s ease;
+    text-align:left;
+    min-height:64px;
+  }
+  .dl-btn:hover, .dl-btn:focus-visible{
+    transform:translateY(-2px);
+    border-color:var(--accent-a);
+    box-shadow:0 8px 28px -8px rgba(125,211,252,0.35);
+    outline:none;
+  }
+  .dl-btn:active{ transform:translateY(0); }
+
+  .dl-btn .icon{
+    flex:0 0 auto;
+    width:34px;
+    height:34px;
+  }
+  .dl-btn .label{
+    display:flex;
+    flex-direction:column;
+    gap:2px;
+  }
+  .dl-btn .platform{
+    font-weight:700;
+    font-size:1.05rem;
+  }
+  .dl-btn .sub{
+    font-size:0.82rem;
+    color:var(--text-2);
+  }
+
+  .dl-btn.recommended{
+    border-color:var(--accent-a);
+    box-shadow:0 0 0 1px rgba(125,211,252,0.25), 0 8px 28px -10px rgba(125,211,252,0.45);
+    background:linear-gradient(160deg, #182050 0%, var(--panel) 60%);
+  }
+  .recommended-badge{
+    position:absolute;
+    top:-11px;
+    right:16px;
+    background:linear-gradient(90deg, var(--accent-a), var(--accent-b));
+    color:#08102a;
+    font-size:0.7rem;
+    font-weight:800;
+    padding:3px 10px;
+    border-radius:999px;
+    letter-spacing:0.02em;
+    display:none;
+  }
+  .dl-btn.recommended .recommended-badge{ display:inline-block; }
+
+  .version-note{
+    text-align:center;
+    color:var(--text-2);
+    font-size:0.85rem;
+    margin:6px 0 0;
+  }
+  .version-note a{ color:var(--accent-a); text-decoration:underline; }
+
+  /* ---------- Sections ---------- */
+  section{
+    padding:52px 0;
+  }
+  .section-title{
+    font-size:clamp(1.3rem, 4.5vw, 1.7rem);
+    font-weight:800;
+    text-align:center;
+    margin:0 0 8px;
+  }
+  .section-sub{
+    text-align:center;
+    color:var(--text-2);
+    max-width:520px;
+    margin:0 auto 32px;
+    font-size:0.95rem;
+  }
+
+  /* ---------- Platform steps ---------- */
+  .platforms{
+    display:grid;
+    grid-template-columns:1fr;
+    gap:24px;
+  }
+  @media (min-width:700px){
+    .platforms{ grid-template-columns:1fr 1fr; }
+  }
+
+  .platform-card{
+    background:var(--panel);
+    border:1px solid var(--panel-border);
+    border-radius:20px;
+    padding:24px 22px 26px;
+  }
+  .platform-card h3{
+    display:flex;
+    align-items:center;
+    gap:10px;
+    margin:0 0 18px;
+    font-size:1.15rem;
+  }
+  .platform-card h3 svg{ width:26px; height:26px; flex:0 0 auto; }
+
+  .steps{
+    list-style:none;
+    margin:0;
+    padding:0;
+    counter-reset:step;
+  }
+  .steps li{
+    counter-increment:step;
+    display:flex;
+    gap:14px;
+    padding:10px 0;
+    border-top:1px solid rgba(255,255,255,0.06);
+  }
+  .steps li:first-child{ border-top:none; }
+  .steps li::before{
+    content:counter(step);
+    flex:0 0 auto;
+    width:26px;
+    height:26px;
+    border-radius:50%;
+    background:linear-gradient(135deg, var(--accent-a), var(--accent-b));
+    color:#08102a;
+    font-weight:800;
+    font-size:0.85rem;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+  }
+  .steps li p{
+    margin:0;
+    font-size:0.95rem;
+    color:var(--text-1);
+  }
+  .steps code{
+    background:#0a0e22;
+    border:1px solid var(--panel-border);
+    border-radius:6px;
+    padding:2px 6px;
+    font-size:0.85em;
+    color:var(--accent-a);
+    word-break:break-all;
+  }
+  .steps li p strong{ color:var(--text-0); }
+
+  .callout{
+    margin-top:16px;
+    padding:12px 14px;
+    border-radius:12px;
+    background:rgba(52,211,153,0.08);
+    border:1px solid rgba(52,211,153,0.28);
+    font-size:0.87rem;
+    color:var(--text-1);
+  }
+  .callout.warn{
+    background:rgba(251,191,36,0.08);
+    border-color:rgba(251,191,36,0.3);
+  }
+  .callout strong{ color:var(--text-0); }
+
+  details.fallback{
+    margin-top:14px;
+    border-radius:12px;
+    background:rgba(244,114,182,0.06);
+    border:1px solid rgba(244,114,182,0.25);
+    padding:10px 14px;
+  }
+  details.fallback summary{
+    cursor:pointer;
+    font-weight:700;
+    font-size:0.88rem;
+    color:var(--text-0);
+    list-style:none;
+  }
+  details.fallback summary::-webkit-details-marker{ display:none; }
+  details.fallback summary::before{
+    content:"▸ ";
+    color:var(--accent-c);
+  }
+  details.fallback[open] summary::before{ content:"▾ "; }
+  details.fallback p{
+    font-size:0.87rem;
+    color:var(--text-1);
+    margin:10px 0 4px;
+  }
+  details.fallback pre{
+    background:#0a0e22;
+    border:1px solid var(--panel-border);
+    border-radius:8px;
+    padding:12px;
+    overflow-x:auto;
+    font-size:0.82rem;
+    color:var(--accent-d);
+    margin:8px 0 0;
+  }
+
+  /* ---------- Feature strip ---------- */
+  .features{
+    display:grid;
+    grid-template-columns:1fr;
+    gap:14px;
+  }
+  @media (min-width:560px){
+    .features{ grid-template-columns:1fr 1fr; }
+  }
+  @media (min-width:900px){
+    .features{ grid-template-columns:1fr 1fr 1fr; }
+  }
+  .feature{
+    background:var(--panel);
+    border:1px solid var(--panel-border);
+    border-radius:16px;
+    padding:18px;
+    display:flex;
+    gap:12px;
+    align-items:flex-start;
+  }
+  .feature .fi{
+    flex:0 0 auto;
+    width:38px;
+    height:38px;
+    border-radius:10px;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    background:rgba(125,211,252,0.1);
+  }
+  .feature .fi svg{ width:20px; height:20px; }
+  .feature h4{
+    margin:0 0 4px;
+    font-size:0.98rem;
+  }
+  .feature p{
+    margin:0;
+    font-size:0.85rem;
+    color:var(--text-2);
+  }
+
+  /* ---------- Footer ---------- */
+  footer{
+    padding:36px 0 44px;
+    border-top:1px solid var(--panel-border);
+    text-align:center;
+    color:var(--text-2);
+    font-size:0.85rem;
+  }
+  footer .flinks{
+    display:flex;
+    flex-wrap:wrap;
+    gap:8px 18px;
+    justify-content:center;
+    margin-bottom:14px;
+  }
+  footer a{
+    color:var(--text-1);
+    text-decoration:none;
+    border-bottom:1px solid transparent;
+  }
+  footer a:hover, footer a:focus-visible{
+    color:var(--accent-a);
+    border-bottom-color:var(--accent-a);
+  }
+  footer .made-by{ color:var(--text-2); }
+  footer .made-by strong{ color:var(--text-1); }
+
+  .sr-only{
+    position:absolute;
+    width:1px;height:1px;
+    padding:0;margin:-1px;
+    overflow:hidden;
+    clip:rect(0,0,0,0);
+    white-space:nowrap;
+    border:0;
+  }
+
+  @media (max-width:400px){
+    .aurora-stage{ padding-top:40px; }
+    section{ padding:40px 0; }
+    .platform-card{ padding:20px 16px 22px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="aurora-stage">
+  <svg class="aurora-svg" viewBox="0 0 1200 500" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+    <defs>
+      <linearGradient id="g1" x1="0" y1="0" x2="1" y2="0">
+        <stop offset="0%" stop-color="#34d399" stop-opacity="0.55"/>
+        <stop offset="45%" stop-color="#7dd3fc" stop-opacity="0.55"/>
+        <stop offset="75%" stop-color="#a78bfa" stop-opacity="0.5"/>
+        <stop offset="100%" stop-color="#f472b6" stop-opacity="0.35"/>
+      </linearGradient>
+      <linearGradient id="g2" x1="0" y1="0" x2="1" y2="0">
+        <stop offset="0%" stop-color="#a78bfa" stop-opacity="0.4"/>
+        <stop offset="50%" stop-color="#f472b6" stop-opacity="0.45"/>
+        <stop offset="100%" stop-color="#fbbf24" stop-opacity="0.3"/>
+      </linearGradient>
+      <linearGradient id="g3" x1="0" y1="0" x2="1" y2="0">
+        <stop offset="0%" stop-color="#7dd3fc" stop-opacity="0.3"/>
+        <stop offset="50%" stop-color="#34d399" stop-opacity="0.35"/>
+        <stop offset="100%" stop-color="#a78bfa" stop-opacity="0.3"/>
+      </linearGradient>
+    </defs>
+    <path class="aurora-band b1" d="M -100 180 C 200 60, 500 260, 800 90 S 1300 170, 1500 60 L 1500 0 L -100 0 Z" fill="url(#g1)"/>
+    <path class="aurora-band b2" d="M -100 240 C 250 340, 550 120, 850 260 S 1250 330, 1500 200 L 1500 0 L -100 0 Z" fill="url(#g2)"/>
+    <path class="aurora-band b3" d="M -100 300 C 300 200, 600 380, 900 240 S 1250 380, 1500 300 L 1500 0 L -100 0 Z" fill="url(#g3)"/>
+  </svg>
+
+  <div class="wrap hero">
+    <svg class="logo" viewBox="0 0 96 96" role="img" aria-labelledby="logotitle">
+      <title id="logotitle">Bifrost logo — a rainbow bridge arcing over a stylized mountain</title>
+      <defs>
+        <linearGradient id="bridge" x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0%" stop-color="#f472b6"/>
+          <stop offset="25%" stop-color="#fbbf24"/>
+          <stop offset="50%" stop-color="#34d399"/>
+          <stop offset="75%" stop-color="#7dd3fc"/>
+          <stop offset="100%" stop-color="#a78bfa"/>
+        </linearGradient>
+        <radialGradient id="moon" cx="0.5" cy="0.5" r="0.5">
+          <stop offset="0%" stop-color="#fff8e7"/>
+          <stop offset="100%" stop-color="#ffe9b3"/>
+        </radialGradient>
+      </defs>
+      <circle cx="48" cy="48" r="46" fill="#0d1128" stroke="#2a3468" stroke-width="1.5"/>
+      <circle cx="66" cy="30" r="9" fill="url(#moon)" opacity="0.9"/>
+      <g fill="none" stroke="url(#bridge)" stroke-width="4" stroke-linecap="round">
+        <path d="M14 70 Q48 22 82 70" opacity="1"/>
+        <path d="M18 74 Q48 30 78 74" opacity="0.75"/>
+        <path d="M22 78 Q48 38 74 78" opacity="0.55"/>
+      </g>
+      <path d="M30 82 L48 52 L66 82 Z" fill="#141a36" stroke="#3a4278" stroke-width="2" stroke-linejoin="round"/>
+      <path d="M48 52 L58 82 L38 82 Z" fill="#1a2244"/>
+    </svg>
+
+    <h1>Bifrost — <span class="grad">Valheim mods made easy</span><br>on Mac &amp; Windows</h1>
+    <p class="tagline">One app to install, update, and manage your Valheim mods — no command line, no manual file wrangling.</p>
+
+    <div class="downloads" id="downloads">
+      <a class="dl-btn" id="btn-mac" href="https://github.com/Joto3D/Bifrost/releases/latest/download/Bifrost-macOS.zip">
+        <span class="recommended-badge">Recommended for you</span>
+        <svg class="icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M16.365 1.43c0 1.14-.462 2.13-1.15 2.9-.78.85-2.06 1.53-3.09 1.44-.12-1.09.44-2.24 1.15-2.99.79-.83 2.18-1.46 3.09-1.35Zm3.24 16.62c-.34.79-.75 1.53-1.24 2.22-.66.94-1.2 1.59-1.63 1.96-.66.6-1.37.9-2.13.92-.55.01-1.21-.16-1.98-.5-.77-.34-1.48-.5-2.13-.5-.68 0-1.4.16-2.16.5-.76.34-1.38.51-1.85.53-.73.03-1.46-.28-2.19-.94-.46-.4-1.02-1.08-1.7-2.03-.73-1.02-1.33-2.2-1.8-3.56-.5-1.47-.76-2.9-.76-4.28 0-1.58.34-2.94 1.02-4.09.53-.92 1.24-1.65 2.12-2.18a5.6 5.6 0 0 1 2.87-.86c.6 0 1.39.19 2.36.55.97.36 1.59.55 1.86.55.2 0 .89-.22 2.06-.65 1.1-.4 2.03-.57 2.79-.51 2.06.17 3.6 0.98 4.63 2.44-1.85 1.12-2.76 2.69-2.75 4.7.02 1.57.6 2.87 1.72 3.9.51.49 1.09.87 1.72 1.14-.14.4-.29.78-.45 1.15Z" fill="#f4f6ff"/>
+        </svg>
+        <span class="label">
+          <span class="platform">Download for Mac</span>
+          <span class="sub">Apple Silicon · macOS 14+</span>
+        </span>
+      </a>
+
+      <a class="dl-btn" id="btn-win" href="https://github.com/Joto3D/Bifrost/releases/latest/download/Bifrost-win-x64.zip">
+        <span class="recommended-badge">Recommended for you</span>
+        <svg class="icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M3 5.5 10.4 4.4v7.1H3V5.5Zm0 13 7.4 1v-7H3v6Zm8.4-14.2 9.6-1.3v8.5h-9.6V4.3Zm0 8.5h9.6v8.4l-9.6-1.3v-7.1Z" fill="#f4f6ff"/>
+        </svg>
+        <span class="label">
+          <span class="platform">Download for Windows</span>
+          <span class="sub">Windows 10/11 · 64-bit</span>
+        </span>
+      </a>
+    </div>
+    <p class="version-note">Always the latest release · see <a href="https://github.com/Joto3D/Bifrost/releases" target="_blank" rel="noopener">all versions on GitHub</a></p>
+  </div>
+</div>
+
+<div class="wrap">
+  <section id="first-open">
+    <h2 class="section-title">First time opening it</h2>
+    <p class="section-sub">Both operating systems double-check apps that don't come from an app store. That's normal — here's exactly what to click.</p>
+
+    <div class="platforms">
+      <div class="platform-card">
+        <h3>
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M16.365 1.43c0 1.14-.462 2.13-1.15 2.9-.78.85-2.06 1.53-3.09 1.44-.12-1.09.44-2.24 1.15-2.99.79-.83 2.18-1.46 3.09-1.35Zm3.24 16.62c-.34.79-.75 1.53-1.24 2.22-.66.94-1.2 1.59-1.63 1.96-.66.6-1.37.9-2.13.92-.55.01-1.21-.16-1.98-.5-.77-.34-1.48-.5-2.13-.5-.68 0-1.4.16-2.16.5-.76.34-1.38.51-1.85.53-.73.03-1.46-.28-2.19-.94-.46-.4-1.02-1.08-1.7-2.03-.73-1.02-1.33-2.2-1.8-3.56-.5-1.47-.76-2.9-.76-4.28 0-1.58.34-2.94 1.02-4.09.53-.92 1.24-1.65 2.12-2.18a5.6 5.6 0 0 1 2.87-.86c.6 0 1.39.19 2.36.55.97.36 1.59.55 1.86.55.2 0 .89-.22 2.06-.65 1.1-.4 2.03-.57 2.79-.51 2.06.17 3.6 0.98 4.63 2.44-1.85 1.12-2.76 2.69-2.75 4.7.02 1.57.6 2.87 1.72 3.9.51.49 1.09.87 1.72 1.14-.14.4-.29.78-.45 1.15Z" fill="#7dd3fc"/></svg>
+          On a Mac
+        </h3>
+        <ol class="steps">
+          <li><p>Open the downloaded <strong>Bifrost-macOS.zip</strong> — it unzips itself into <strong>Bifrost.app</strong>.</p></li>
+          <li><p>Optional: drag <strong>Bifrost.app</strong> into your <strong>Applications</strong> folder.</p></li>
+          <li><p><strong>Right-click</strong> Bifrost.app → <strong>Open</strong> → click <strong>Open</strong> again in the popup. Do this the very first time instead of double-clicking.</p></li>
+        </ol>
+        <div class="callout">
+          Mac shows a warning here because Bifrost is made by an indie developer, not a big company with an Apple certificate — that's expected, not a sign anything's wrong.
+        </div>
+        <details class="fallback">
+          <summary>Mac says the app is "damaged" and won't open?</summary>
+          <p>This happens because macOS flags files downloaded from the internet — it's not actually damaged. Open <strong>Terminal</strong> (search for it with Spotlight) and paste this, then press Return:</p>
+          <pre>xattr -d com.apple.quarantine ~/Downloads/Bifrost.app</pre>
+          <p>Then try opening Bifrost again as above. If you moved it to Applications first, use that path instead of <code>~/Downloads</code>.</p>
+        </details>
+      </div>
+
+      <div class="platform-card">
+        <h3>
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M3 5.5 10.4 4.4v7.1H3V5.5Zm0 13 7.4 1v-7H3v6Zm8.4-14.2 9.6-1.3v8.5h-9.6V4.3Zm0 8.5h9.6v8.4l-9.6-1.3v-7.1Z" fill="#a78bfa"/></svg>
+          On Windows
+        </h3>
+        <ol class="steps">
+          <li><p>Open the downloaded <strong>Bifrost-win-x64.zip</strong> and click <strong>Extract all</strong>.</p></li>
+          <li><p>Open the extracted folder and double-click <strong>Bifrost.exe</strong>.</p></li>
+          <li><p>If Windows SmartScreen pops up ("Windows protected your PC"), click <strong>More info</strong>, then <strong>Run anyway</strong>.</p></li>
+        </ol>
+        <div class="callout warn">
+          SmartScreen shows this for any new indie app that hasn't built up a download history yet — it's a reputation check, not a virus warning.
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="features">
+    <h2 class="section-title">What Bifrost does for you</h2>
+    <p class="section-sub">All the fiddly parts of modding Valheim, handled.</p>
+
+    <div class="features">
+      <div class="feature">
+        <span class="fi"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 2 3 6v6c0 5 3.8 8.7 9 10 5.2-1.3 9-5 9-10V6l-9-4Z" stroke="#7dd3fc" stroke-width="1.6" stroke-linejoin="round"/><path d="m9 12 2 2 4-4" stroke="#7dd3fc" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+        <div><h4>One-click installs</h4><p>Grab mods straight from Thunderstore or Nexus with a single click — dependencies resolve automatically.</p></div>
+      </div>
+      <div class="feature">
+        <span class="fi"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="4" y="4" width="7" height="7" rx="1.5" stroke="#a78bfa" stroke-width="1.6"/><rect x="13" y="4" width="7" height="7" rx="1.5" stroke="#a78bfa" stroke-width="1.6"/><rect x="4" y="13" width="7" height="7" rx="1.5" stroke="#a78bfa" stroke-width="1.6"/><rect x="13" y="13" width="7" height="7" rx="1.5" stroke="#a78bfa" stroke-width="1.6"/></svg></span>
+        <div><h4>Mod profiles</h4><p>Keep separate modlists for different worlds or servers, and switch between them in seconds.</p></div>
+      </div>
+      <div class="feature">
+        <span class="fi"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 3v12" stroke="#34d399" stroke-width="1.6" stroke-linecap="round"/><path d="m7 11 5 5 5-5" stroke="#34d399" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M5 19h14" stroke="#34d399" stroke-width="1.6" stroke-linecap="round"/></svg></span>
+        <div><h4>Automatic save backups</h4><p>Bifrost quietly backs up your world saves so a bad mod update can never cost you progress.</p></div>
+      </div>
+      <div class="feature">
+        <span class="fi"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 2 4 5v6c0 5 3.4 7.9 8 11 4.6-3.1 8-6 8-11V5l-8-3Z" stroke="#f472b6" stroke-width="1.6" stroke-linejoin="round"/></svg></span>
+        <div><h4>Safe multiplayer mode</h4><p>Play modded with friends without risking a mismatch kicking you out of the server mid-raid.</p></div>
+      </div>
+      <div class="feature">
+        <span class="fi"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="4" stroke="#fbbf24" stroke-width="1.6"/><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1" stroke="#fbbf24" stroke-width="1.6" stroke-linecap="round"/></svg></span>
+        <div><h4>Six themes</h4><p>Pick the look that fits your setup, from cozy to cosmic.</p></div>
+      </div>
+      <div class="feature">
+        <span class="fi"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 4h16v12H7l-3 3V4Z" stroke="#7dd3fc" stroke-width="1.6" stroke-linejoin="round"/><path d="M8 9h8M8 12h5" stroke="#7dd3fc" stroke-width="1.6" stroke-linecap="round"/></svg></span>
+        <div><h4>No command line, ever</h4><p>Every step — from finding Valheim to launching modded — happens through a normal app window.</p></div>
+      </div>
+    </div>
+  </section>
+</div>
+
+<footer>
+  <div class="wrap">
+    <div class="flinks">
+      <a href="https://github.com/Joto3D/Bifrost" target="_blank" rel="noopener">GitHub repository</a>
+      <a href="https://github.com/Joto3D/Bifrost/blob/main/LICENSE" target="_blank" rel="noopener">MIT License</a>
+      <a href="https://github.com/Joto3D/Bifrost/releases" target="_blank" rel="noopener">All releases</a>
+      <a href="https://github.com/Joto3D/Bifrost/issues" target="_blank" rel="noopener">Report an issue</a>
+    </div>
+    <p class="made-by">Made by <strong>Joto3D</strong>. Bifrost is an independent, unofficial project and isn't affiliated with Iron Gate or Coffee Stain.</p>
+  </div>
+</footer>
+
+<script>
+(function(){
+  var ua = navigator.userAgent || navigator.platform || "";
+  var isMac = /Mac|iPhone|iPad|iPod/i.test(ua) && !/Windows/i.test(ua);
+  var isWin = /Win/i.test(ua);
+  var mac = document.getElementById('btn-mac');
+  var win = document.getElementById('btn-win');
+  if (isWin) {
+    win.classList.add('recommended');
+  } else if (isMac) {
+    mac.classList.add('recommended');
+  }
+})();
+</script>
+
+</body>
+</html>

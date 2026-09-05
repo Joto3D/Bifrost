@@ -1,5 +1,24 @@
 # Bifrost
 
+## ⬇ Install
+
+**[Download Bifrost →](https://joto3d.github.io/Bifrost/)**
+
+The link above is a friendly download page with one-click buttons for Mac
+and Windows, plus step-by-step "first open" instructions (both OSes warn
+about apps from indie developers — that's normal, the page shows you
+exactly what to click).
+
+Prefer to grab the files directly? Latest release, straight from GitHub:
+
+- macOS (Apple Silicon): https://github.com/Joto3D/Bifrost/releases/latest/download/Bifrost-macOS.zip
+- Windows (64-bit): https://github.com/Joto3D/Bifrost/releases/latest/download/Bifrost-win-x64.zip
+- [All releases](https://github.com/Joto3D/Bifrost/releases)
+
+Everything below this point — building from source, architecture, how the
+modded launch works — is for developers. If you just want to play modded
+Valheim, the download page above is all you need.
+
 A Valheim mod launcher/manager for macOS (Apple Silicon). Bifrost makes
 running a modded Valheim on Mac painless by handling the parts that are
 normally fiddly to do by hand:
