@@ -12,3 +12,6 @@ obj/
 ## OS cruft
 .DS_Store
 Thumbs.db
+
+## Packaged distribution output
+dist/

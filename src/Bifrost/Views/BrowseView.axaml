@@ -1,6 +1,8 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:Bifrost.ViewModels"
+             xmlns:svc="using:Bifrost.Services"
+             xmlns:conv="using:Bifrost.Converters"
              x:Class="Bifrost.Views.BrowseView"
              x:DataType="vm:BrowseViewModel">
     <Grid Margin="32" RowDefinitions="Auto,Auto,*,Auto">
@@ -9,53 +11,108 @@
 
         <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="12" Margin="0,0,0,12">
             <TextBox Text="{Binding SearchText}" PlaceholderText="Search name, owner, description..." Width="320" />
-            <ComboBox ItemsSource="{Binding SortOrders}" SelectedItem="{Binding SortOrder}" Width="140" />
+            <ComboBox ItemsSource="{Binding SortOrders}" SelectedItem="{Binding SortOrder}" Width="160" />
             <Button Content="Refresh" Command="{Binding LoadCommand}" />
+            <ProgressBar IsIndeterminate="True" Width="80" IsVisible="{Binding IsLoading}" VerticalAlignment="Center" />
         </StackPanel>
 
-        <ListBox Grid.Row="2" ItemsSource="{Binding Packages}">
-            <ListBox.ItemTemplate>
-                <DataTemplate DataType="vm:PackageRowViewModel">
-                    <Grid ColumnDefinitions="*,Auto" Margin="0,4">
-                        <StackPanel Grid.Column="0" Spacing="2">
-                            <StackPanel Orientation="Horizontal" Spacing="6">
-                                <TextBlock FontWeight="SemiBold">
-                                    <Run Text="{Binding DisplayTitle}" />
-                                    <Run Text=" v" /><Run Text="{Binding LatestVersion}" />
-                                </TextBlock>
-                                <TextBlock Text="installed" Opacity="0.6" FontStyle="Italic" IsVisible="{Binding IsInstalled}" />
-                            </StackPanel>
-                            <TextBlock Text="{Binding Description}" Opacity="0.7" TextWrapping="Wrap" MaxLines="2" />
-                            <TextBlock Opacity="0.6" FontSize="11">
-                                <Run Text="rating " /><Run Text="{Binding RatingScore}" />
-                                <Run Text="  downloads " /><Run Text="{Binding TotalDownloads}" />
-                                <Run Text="  updated " /><Run Text="{Binding DateUpdated}" />
-                            </TextBlock>
-                        </StackPanel>
-                        <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
-                            <Button Content="Details..." Click="OnDetailsClick" />
-                            <Button Content="Install"
-                                    Command="{Binding $parent[ListBox].((vm:BrowseViewModel)DataContext).InstallCommand}"
-                                    CommandParameter="{Binding}" />
-                        </StackPanel>
-                    </Grid>
-                </DataTemplate>
-            </ListBox.ItemTemplate>
-        </ListBox>
+        <Grid Grid.Row="2">
+            <!-- Loading state: shown only on the very first load, before anything's rendered. -->
+            <StackPanel IsVisible="{Binding ShowLoadingState}" Spacing="8" HorizontalAlignment="Center" VerticalAlignment="Center">
+                <TextBlock Text="Loading thousands of mods…" FontWeight="Medium" HorizontalAlignment="Center" />
+                <TextBlock Text="This can take a moment on first load." Opacity="0.6" FontSize="12" HorizontalAlignment="Center" />
+            </StackPanel>
 
-        <Border Grid.Row="3" Background="{DynamicResource BifrostSidebarBrush}" CornerRadius="6" Padding="12" Margin="0,12,0,0">
+            <!-- Empty state: search matched nothing, or the index came back empty. -->
+            <StackPanel IsVisible="{Binding ShowEmptyState}" Spacing="6" HorizontalAlignment="Center" VerticalAlignment="Center">
+                <TextBlock Text="No mods match your search" FontWeight="Medium" HorizontalAlignment="Center" />
+                <TextBlock Text="Try a different name, author, or fewer words." Opacity="0.6" FontSize="12" HorizontalAlignment="Center" />
+            </StackPanel>
+
+            <ListBox ItemsSource="{Binding Packages}" IsVisible="{Binding HasResults}" Background="Transparent">
+                <ListBox.ItemTemplate>
+                    <DataTemplate DataType="vm:PackageRowViewModel">
+                        <Border Background="{DynamicResource BifrostCardBackgroundBrush}"
+                                BorderBrush="{DynamicResource BifrostCardBorderBrush}" BorderThickness="1"
+                                CornerRadius="10" Padding="12" Margin="0,4">
+                            <Grid ColumnDefinitions="56,*,Auto">
+                                <Border Grid.Column="0" Width="56" Height="56" CornerRadius="11"
+                                        VerticalAlignment="Top"
+                                        svc:IconLoader.SourceUrl="{Binding IconUrl}" />
+
+                                <StackPanel Grid.Column="1" Spacing="4" Margin="12,0">
+                                    <StackPanel Orientation="Horizontal" Spacing="6">
+                                        <TextBlock Text="{Binding Name}" FontWeight="SemiBold" />
+                                        <TextBlock Text="by" Opacity="0.5" FontSize="12" VerticalAlignment="Center" />
+                                        <TextBlock Text="{Binding Owner}" Opacity="0.7" FontSize="12" VerticalAlignment="Center" />
+                                        <Border Background="{DynamicResource BifrostBadgeTintSoftBrush}" CornerRadius="4" Padding="5,1" IsVisible="{Binding IsInstalled}">
+                                            <TextBlock Text="Installed" FontSize="10" Foreground="{DynamicResource BifrostSecondaryAccentBrush}" />
+                                        </Border>
+                                    </StackPanel>
+
+                                    <TextBlock Text="{Binding Description}" Opacity="0.65" FontSize="12" TextWrapping="Wrap" MaxLines="2"
+                                               IsVisible="{Binding Description, Converter={x:Static conv:StatusConverters.HasText}}" />
+
+                                    <StackPanel Orientation="Horizontal" Spacing="6">
+                                        <Border Background="#14808080" CornerRadius="999" Padding="7,2">
+                                            <TextBlock FontSize="10">
+                                                <Run Text="&#x2193; " /><Run Text="{Binding DownloadsCompact}" />
+                                            </TextBlock>
+                                        </Border>
+                                        <Border Background="#14808080" CornerRadius="999" Padding="7,2">
+                                            <TextBlock FontSize="10">
+                                                <Run Text="&#x2605; " /><Run Text="{Binding RatingScore}" />
+                                            </TextBlock>
+                                        </Border>
+                                        <Border Background="#14808080" CornerRadius="999" Padding="7,2">
+                                            <TextBlock Text="{Binding UpdatedAgo}" FontSize="10" />
+                                        </Border>
+                                        <TextBlock Text="{Binding LatestVersion, StringFormat='v{0}'}" FontSize="10" Opacity="0.5" VerticalAlignment="Center" />
+                                    </StackPanel>
+
+                                    <ItemsControl ItemsSource="{Binding Categories}">
+                                        <ItemsControl.ItemsPanel>
+                                            <ItemsPanelTemplate>
+                                                <WrapPanel />
+                                            </ItemsPanelTemplate>
+                                        </ItemsControl.ItemsPanel>
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate x:DataType="x:String">
+                                                <Border Background="{DynamicResource BifrostBadgeTintSoftBrush}" CornerRadius="999" Padding="7,2" Margin="0,2,4,0">
+                                                    <TextBlock Text="{Binding}" FontSize="10" Foreground="{DynamicResource BifrostSecondaryAccentBrush}" />
+                                                </Border>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </StackPanel>
+
+                                <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="6" VerticalAlignment="Top">
+                                    <Button Content="Details..." Click="OnDetailsClick" />
+                                    <Button Content="Install"
+                                            Background="{DynamicResource BifrostAccentButtonFillBrush}" Foreground="White"
+                                            IsVisible="{Binding !IsInstalled}"
+                                            Command="{Binding $parent[ListBox].((vm:BrowseViewModel)DataContext).InstallCommand}"
+                                            CommandParameter="{Binding}" />
+                                </StackPanel>
+                            </Grid>
+                        </Border>
+                    </DataTemplate>
+                </ListBox.ItemTemplate>
+            </ListBox>
+        </Grid>
+
+        <Border Grid.Row="3" Background="{DynamicResource BifrostCardBackgroundBrush}" CornerRadius="10" Padding="12" Margin="0,12,0,0"
+                IsVisible="{Binding IsConfirmingInstall}">
             <StackPanel Spacing="8">
-                <Border IsVisible="{Binding IsConfirmingInstall}" Padding="0,0,0,8">
-                    <StackPanel Spacing="8">
-                        <TextBlock Text="{Binding PendingInstallSummary}" TextWrapping="Wrap" />
-                        <StackPanel Orientation="Horizontal" Spacing="8">
-                            <Button Content="Confirm install" Command="{Binding ConfirmInstallCommand}" />
-                            <Button Content="Cancel" Command="{Binding CancelInstallCommand}" />
-                        </StackPanel>
-                    </StackPanel>
-                </Border>
-                <TextBlock Text="{Binding StatusMessage}" TextWrapping="Wrap" Opacity="0.8" />
+                <TextBlock Text="{Binding PendingInstallSummary}" TextWrapping="Wrap" />
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <Button Content="Confirm install" Command="{Binding ConfirmInstallCommand}"
+                            Background="{DynamicResource BifrostAccentButtonFillBrush}" Foreground="White" />
+                    <Button Content="Cancel" Command="{Binding CancelInstallCommand}" />
+                </StackPanel>
             </StackPanel>
         </Border>
+        <TextBlock Grid.Row="3" Text="{Binding StatusMessage}" TextWrapping="Wrap" Opacity="0.7" FontSize="12"
+                    Margin="0,12,0,0" IsVisible="{Binding !IsConfirmingInstall}" />
     </Grid>
 </UserControl>

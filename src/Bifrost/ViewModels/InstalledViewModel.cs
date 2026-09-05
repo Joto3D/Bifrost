@@ -31,7 +31,10 @@ public partial class InstalledViewModel : ViewModelBase
     public InstalledViewModel(AppServices services)
     {
         _services = services;
+        Mods.CollectionChanged += (_, _) => OnPropertyChanged(nameof(HasMods));
     }
+
+    public bool HasMods => Mods.Count > 0;
 
     [RelayCommand]
     public async Task RefreshAsync()
@@ -52,8 +55,9 @@ public partial class InstalledViewModel : ViewModelBase
             Mods.Clear();
             foreach (var mod in manifest.Mods.OrderBy(m => m.FullName, StringComparer.OrdinalIgnoreCase))
             {
-                var latest = byFullName.TryGetValue(mod.FullName, out var pkg) ? pkg.LatestVersion?.VersionNumber : null;
-                var row = new InstalledModRowViewModel(mod, latest);
+                byFullName.TryGetValue(mod.FullName, out var pkg);
+                var latest = pkg?.LatestVersion?.VersionNumber;
+                var row = new InstalledModRowViewModel(mod, latest) { IconUrl = pkg is not null ? ThunderstoreClient.IconUrl(pkg) : null };
                 row.PropertyChanged += async (_, e) =>
                 {
                     if (e.PropertyName == nameof(InstalledModRowViewModel.Enabled))

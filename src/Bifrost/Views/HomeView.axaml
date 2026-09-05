@@ -1,35 +1,150 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:Bifrost.ViewModels"
+             xmlns:conv="using:Bifrost.Converters"
              x:Class="Bifrost.Views.HomeView"
              x:DataType="vm:HomeViewModel">
-    <StackPanel Margin="32" Spacing="16" MaxWidth="640" HorizontalAlignment="Left">
-        <TextBlock Text="Home" FontSize="24" FontWeight="SemiBold" />
+    <ScrollViewer>
+        <StackPanel Margin="32" Spacing="20" MaxWidth="560" HorizontalAlignment="Left">
 
-        <Border Background="{DynamicResource BifrostSidebarBrush}" CornerRadius="6" Padding="16">
-            <StackPanel Spacing="6">
-                <TextBlock Text="{Binding GameDir, StringFormat='Game: {0}', FallbackValue='Game: not found'}" TextWrapping="Wrap" />
-                <TextBlock Text="{Binding BepInExInstalled, StringFormat='BepInEx installed: {0}'}" />
-                <TextBlock Text="{Binding ModdedEnabled, StringFormat='Doorstop toggle: {0}', FallbackValue='Doorstop toggle: unknown'}" />
-                <TextBlock Text="{Binding SteamRunning, StringFormat='Steam running: {0}'}" />
+            <!-- Title row -->
+            <Grid ColumnDefinitions="48,*,Auto">
+                <Border Grid.Column="0" Width="48" Height="48" CornerRadius="24"
+                        Background="{DynamicResource BifrostAccentGradientBrush}" Opacity="0.9">
+                    <TextBlock Text="&#x1F6E1;" FontSize="20" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                </Border>
+                <StackPanel Grid.Column="1" Margin="14,0,8,0" VerticalAlignment="Center" Spacing="2">
+                    <TextBlock Text="Valheim" FontSize="22" FontWeight="Bold" />
+                    <TextBlock Text="{Binding GameDir, FallbackValue='Not detected — checked via the Steam library'}"
+                               FontSize="12" Opacity="0.6" TextTrimming="CharacterEllipsis" />
+                </StackPanel>
+                <Button Grid.Column="2" Content="&#x21BB;" Command="{Binding RefreshCommand}"
+                        VerticalAlignment="Center" Width="32" Height="32" Padding="0"
+                        HorizontalContentAlignment="Center" ToolTip.Tip="Refresh setup status" />
+            </Grid>
+
+            <!-- First-run setup banner: shown until Valheim is found AND
+                 BepInEx is installed — see HomeViewModel.ShowSetupBanner. -->
+            <Border IsVisible="{Binding ShowSetupBanner}"
+                    Background="{DynamicResource BifrostCardBackgroundBrush}"
+                    BorderBrush="{DynamicResource BifrostBadgeTintBrush}" BorderThickness="1"
+                    CornerRadius="10" Padding="16">
+                <StackPanel Spacing="8">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <TextBlock Text="&#x26A0;" Foreground="{DynamicResource BifrostBadgeTintBrush}" />
+                        <TextBlock Text="{Binding BannerTitle}" FontWeight="SemiBold" />
+                    </StackPanel>
+                    <TextBlock Text="{Binding BannerMessage}" TextWrapping="Wrap" Opacity="0.75" FontSize="12" />
+                    <StackPanel Orientation="Horizontal" Spacing="10" IsVisible="{Binding GameFound}">
+                        <Button Content="Install BepInEx" Command="{Binding InstallBepInExCommand}"
+                                IsEnabled="{Binding IsInstallingBepInEx, Converter={x:Static conv:StatusConverters.Inverse}}"
+                                Background="{DynamicResource BifrostAccentButtonFillBrush}" Foreground="White" />
+                        <TextBlock Text="{Binding BannerProgressLine}" IsVisible="{Binding IsInstallingBepInEx}"
+                                   Opacity="0.7" VerticalAlignment="Center" FontSize="12" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+
+            <!-- Status grid: 2x2 setup prerequisites -->
+            <Grid ColumnDefinitions="*,*" RowDefinitions="Auto,Auto" ColumnSpacing="12" RowSpacing="12">
+                <Border Grid.Row="0" Grid.Column="0" Background="{DynamicResource BifrostCardBackgroundBrush}"
+                        BorderBrush="{DynamicResource BifrostCardBorderBrush}" BorderThickness="1" CornerRadius="10" Padding="12">
+                    <StackPanel Orientation="Horizontal" Spacing="10">
+                        <Border Width="22" Height="22" CornerRadius="11" Background="{Binding GameFound, Converter={x:Static conv:StatusConverters.OkBackground}}">
+                            <TextBlock Text="{Binding GameFound, Converter={x:Static conv:StatusConverters.OkGlyph}}" FontSize="10" FontWeight="Bold"
+                                       Foreground="{Binding GameFound, Converter={x:Static conv:StatusConverters.OkBrush}}"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <StackPanel Spacing="2">
+                            <TextBlock Text="Valheim found" FontSize="13" FontWeight="SemiBold" />
+                            <TextBlock Text="{Binding GameFoundSubtitle}" FontSize="11" Opacity="0.6" />
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+
+                <Border Grid.Row="0" Grid.Column="1" Background="{DynamicResource BifrostCardBackgroundBrush}"
+                        BorderBrush="{DynamicResource BifrostCardBorderBrush}" BorderThickness="1" CornerRadius="10" Padding="12">
+                    <StackPanel Orientation="Horizontal" Spacing="10">
+                        <Border Width="22" Height="22" CornerRadius="11" Background="{Binding BepInExInstalled, Converter={x:Static conv:StatusConverters.OkBackground}}">
+                            <TextBlock Text="{Binding BepInExInstalled, Converter={x:Static conv:StatusConverters.OkGlyph}}" FontSize="10" FontWeight="Bold"
+                                       Foreground="{Binding BepInExInstalled, Converter={x:Static conv:StatusConverters.OkBrush}}"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <StackPanel Spacing="2">
+                            <TextBlock Text="BepInEx installed" FontSize="13" FontWeight="SemiBold" />
+                            <TextBlock Text="{Binding BepInExSubtitle}" FontSize="11" Opacity="0.6" />
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+
+                <Border Grid.Row="1" Grid.Column="0" Background="{DynamicResource BifrostCardBackgroundBrush}"
+                        BorderBrush="{DynamicResource BifrostCardBorderBrush}" BorderThickness="1" CornerRadius="10" Padding="12">
+                    <StackPanel Orientation="Horizontal" Spacing="10">
+                        <Border Width="22" Height="22" CornerRadius="11" Background="{Binding ModdedEnabled, Converter={x:Static conv:StatusConverters.TriBackground}}">
+                            <TextBlock Text="{Binding ModdedEnabled, Converter={x:Static conv:StatusConverters.TriGlyph}}" FontSize="10" FontWeight="Bold"
+                                       Foreground="{Binding ModdedEnabled, Converter={x:Static conv:StatusConverters.TriBrush}}"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <StackPanel Spacing="2">
+                            <TextBlock Text="Launch mode" FontSize="13" FontWeight="SemiBold" />
+                            <TextBlock Text="{Binding ModdedEnabled, Converter={x:Static conv:StatusConverters.TriSubtitle}}" FontSize="11" Opacity="0.6" />
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+
+                <Border Grid.Row="1" Grid.Column="1" Background="{DynamicResource BifrostCardBackgroundBrush}"
+                        BorderBrush="{DynamicResource BifrostCardBorderBrush}" BorderThickness="1" CornerRadius="10" Padding="12">
+                    <StackPanel Orientation="Horizontal" Spacing="10">
+                        <Border Width="22" Height="22" CornerRadius="11" Background="{Binding SteamRunning, Converter={x:Static conv:StatusConverters.OkBackground}}">
+                            <TextBlock Text="{Binding SteamRunning, Converter={x:Static conv:StatusConverters.OkGlyph}}" FontSize="10" FontWeight="Bold"
+                                       Foreground="{Binding SteamRunning, Converter={x:Static conv:StatusConverters.OkBrush}}"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <StackPanel Spacing="2">
+                            <TextBlock Text="Steam" FontSize="13" FontWeight="SemiBold" />
+                            <TextBlock Text="{Binding SteamSubtitle}" FontSize="11" Opacity="0.6" />
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+            </Grid>
+
+            <!-- Profile row -->
+            <Border Background="{DynamicResource BifrostCardBackgroundBrush}"
+                    BorderBrush="{DynamicResource BifrostCardBorderBrush}" BorderThickness="1"
+                    CornerRadius="10" Padding="12,10">
+                <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
+                    <TextBlock Text="Profile" Opacity="0.6" FontSize="12" VerticalAlignment="Center" />
+                    <ComboBox ItemsSource="{Binding Profiles}"
+                              SelectedItem="{Binding SelectedProfile}"
+                              DisplayMemberBinding="{Binding Name}"
+                              MinWidth="180" />
+                    <Button Content="Apply" Command="{Binding ApplyProfileCommand}" />
+                </StackPanel>
+            </Border>
+
+            <TextBlock Text="{Binding StatusMessage}" TextWrapping="Wrap" Opacity="0.7" FontSize="12" />
+
+            <!-- Play section -->
+            <StackPanel Spacing="10" Margin="0,8,0,0">
+                <Button Command="{Binding PlayModdedCommand}"
+                        Height="46" CornerRadius="10"
+                        Background="{DynamicResource BifrostAccentButtonFillBrush}"
+                        Foreground="White" FontWeight="SemiBold" FontSize="15"
+                        HorizontalAlignment="Stretch" HorizontalContentAlignment="Center">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <TextBlock Text="&#x1F4E6;" />
+                        <TextBlock Text="Play Modded" />
+                    </StackPanel>
+                </Button>
+                <Button Command="{Binding PlayVanillaCommand}"
+                        Height="40" CornerRadius="10" Background="Transparent"
+                        HorizontalAlignment="Stretch" HorizontalContentAlignment="Center">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <TextBlock Text="&#x25B6;" />
+                        <TextBlock Text="Play Vanilla" />
+                    </StackPanel>
+                </Button>
             </StackPanel>
-        </Border>
-
-        <StackPanel Orientation="Horizontal" Spacing="12">
-            <Button Content="Play Modded" Command="{Binding PlayModdedCommand}" />
-            <Button Content="Play Vanilla" Command="{Binding PlayVanillaCommand}" />
-            <Button Content="Refresh" Command="{Binding RefreshCommand}" />
         </StackPanel>
-
-        <StackPanel Orientation="Horizontal" Spacing="12" VerticalAlignment="Center">
-            <TextBlock Text="Profile:" VerticalAlignment="Center" />
-            <ComboBox ItemsSource="{Binding Profiles}"
-                      SelectedItem="{Binding SelectedProfile}"
-                      DisplayMemberBinding="{Binding Name}"
-                      MinWidth="200" />
-            <Button Content="Apply" Command="{Binding ApplyProfileCommand}" />
-        </StackPanel>
-
-        <TextBlock Text="{Binding StatusMessage}" TextWrapping="Wrap" Opacity="0.8" />
-    </StackPanel>
+    </ScrollViewer>
 </UserControl>

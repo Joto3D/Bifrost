@@ -1,5 +1,7 @@
+using System.Collections.ObjectModel;
 using Bifrost.Core.Services;
 using Bifrost.Services;
+using Bifrost.Theming;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 
@@ -7,7 +9,8 @@ namespace Bifrost.ViewModels;
 
 /// <summary>
 /// The Settings tab: detected paths, refresh index, open logs/app-data
-/// folders. Mirrors the macOS app's SettingsView.swift.
+/// folders, and the Appearance theme picker. Mirrors the macOS app's
+/// SettingsView.swift.
 /// </summary>
 public partial class SettingsViewModel : ViewModelBase
 {
@@ -19,10 +22,32 @@ public partial class SettingsViewModel : ViewModelBase
     [ObservableProperty] private string _statusMessage = "";
     [ObservableProperty] private bool _isBusy;
 
+    /// <summary>Every selectable palette, for Settings' Appearance section — see <see cref="ThemePalette.All"/>.</summary>
+    public ObservableCollection<PaletteRowViewModel> Palettes { get; } = new();
+
     public SettingsViewModel(AppServices services)
     {
         _services = services;
         Refresh();
+
+        foreach (var palette in ThemePalette.All)
+        {
+            Palettes.Add(new PaletteRowViewModel(palette, palette.Id == ThemeStore.Instance.Current.Id));
+        }
+    }
+
+    [RelayCommand]
+    private void SelectPalette(PaletteRowViewModel? row)
+    {
+        if (row is null)
+        {
+            return;
+        }
+        ThemeStore.Instance.Current = row.Palette;
+        foreach (var candidate in Palettes)
+        {
+            candidate.IsSelected = candidate.Palette.Id == row.Palette.Id;
+        }
     }
 
     private void Refresh()

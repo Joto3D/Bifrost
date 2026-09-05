@@ -19,6 +19,10 @@ public partial class InstalledModRowViewModel : ObservableObject
     public string FullName => Mod.FullName;
     public string InstalledVersion => Mod.Version;
 
+    /// <summary>This mod's Thunderstore icon URL, if the index has loaded and contains it — set by <c>InstalledViewModel.RefreshAsync</c>.</summary>
+    [ObservableProperty]
+    private string? _iconUrl;
+
     [ObservableProperty]
     private string? _latestVersion;
 

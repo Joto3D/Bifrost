@@ -1,6 +1,7 @@
 <UserControl xmlns="https://github.com/avaloniaui"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="using:Bifrost.ViewModels"
+             xmlns:svc="using:Bifrost.Services"
              x:Class="Bifrost.Views.InstalledView"
              x:DataType="vm:InstalledViewModel">
     <Grid Margin="32" RowDefinitions="Auto,Auto,*,Auto">
@@ -14,48 +15,72 @@
             <Button Content="Configs..." Click="OnManageConfigsClick" />
         </StackPanel>
 
-        <ListBox Grid.Row="2" ItemsSource="{Binding Mods}">
-            <ListBox.ItemTemplate>
-                <DataTemplate DataType="vm:InstalledModRowViewModel">
-                    <Grid ColumnDefinitions="Auto,*,Auto,Auto,Auto" Margin="0,4">
-                        <CheckBox Grid.Column="0" IsChecked="{Binding Enabled}" VerticalAlignment="Center" />
-                        <StackPanel Grid.Column="1" Spacing="2" Margin="8,0">
-                            <TextBlock FontWeight="SemiBold">
-                                <Run Text="{Binding FullName}" />
-                                <Run Text=" v" /><Run Text="{Binding InstalledVersion}" />
-                            </TextBlock>
-                            <TextBlock Text="{Binding LatestVersion, StringFormat='Update available: {0}'}"
-                                       IsVisible="{Binding UpdateAvailable}" Opacity="0.7" FontSize="11" />
-                            <ItemsControl ItemsSource="{Binding Keybinds}" IsVisible="{Binding HasKeybinds}">
-                                <ItemsControl.ItemsPanel>
-                                    <ItemsPanelTemplate>
-                                        <WrapPanel />
-                                    </ItemsPanelTemplate>
-                                </ItemsControl.ItemsPanel>
-                                <ItemsControl.ItemTemplate>
-                                    <DataTemplate x:DataType="x:String">
-                                        <Border Background="#22808080" CornerRadius="4" Padding="5,1" Margin="0,0,4,3">
-                                            <TextBlock Text="{Binding}" FontSize="10" />
-                                        </Border>
-                                    </DataTemplate>
-                                </ItemsControl.ItemTemplate>
-                            </ItemsControl>
-                        </StackPanel>
-                        <Button Grid.Column="2" Content="Config" Margin="4,0"
-                                IsVisible="{Binding HasConfig}"
-                                Click="OnEditConfigClick" />
-                        <Button Grid.Column="3" Content="Update" Margin="4,0"
-                                IsVisible="{Binding UpdateAvailable}"
-                                Command="{Binding $parent[ListBox].((vm:InstalledViewModel)DataContext).UpdateCommand}"
-                                CommandParameter="{Binding}" />
-                        <Button Grid.Column="4" Content="Remove"
-                                Command="{Binding $parent[ListBox].((vm:InstalledViewModel)DataContext).RemoveCommand}"
-                                CommandParameter="{Binding}" />
-                    </Grid>
-                </DataTemplate>
-            </ListBox.ItemTemplate>
-        </ListBox>
+        <Grid Grid.Row="2">
+            <StackPanel IsVisible="{Binding !HasMods}" Spacing="6" HorizontalAlignment="Center" VerticalAlignment="Center">
+                <TextBlock Text="No mods yet — find some in Browse" FontWeight="Medium" HorizontalAlignment="Center" />
+                <TextBlock Text="Installed mods, their versions, and their configs will show up here." Opacity="0.6" FontSize="12" HorizontalAlignment="Center" />
+            </StackPanel>
 
-        <TextBlock Grid.Row="3" Text="{Binding StatusMessage}" TextWrapping="Wrap" Opacity="0.8" Margin="0,12,0,0" />
+            <ListBox ItemsSource="{Binding Mods}" IsVisible="{Binding HasMods}" Background="Transparent">
+                <ListBox.ItemTemplate>
+                    <DataTemplate DataType="vm:InstalledModRowViewModel">
+                        <Border Background="{DynamicResource BifrostCardBackgroundBrush}"
+                                BorderBrush="{DynamicResource BifrostCardBorderBrush}" BorderThickness="1"
+                                CornerRadius="10" Padding="10" Margin="0,3">
+                            <Grid ColumnDefinitions="40,Auto,*,Auto,Auto,Auto">
+                                <Border Grid.Column="0" Width="40" Height="40" CornerRadius="9"
+                                        VerticalAlignment="Center"
+                                        svc:IconLoader.SourceUrl="{Binding IconUrl}" />
+
+                                <CheckBox Grid.Column="1" IsChecked="{Binding Enabled}" VerticalAlignment="Center" Margin="10,0,0,0" />
+
+                                <StackPanel Grid.Column="2" Spacing="3" Margin="10,0">
+                                    <StackPanel Orientation="Horizontal" Spacing="6">
+                                        <TextBlock FontWeight="SemiBold">
+                                            <Run Text="{Binding FullName}" />
+                                            <Run Text=" v" /><Run Text="{Binding InstalledVersion}" />
+                                        </TextBlock>
+                                        <Border Background="{DynamicResource BifrostAccentGradientBrush}" CornerRadius="999" Padding="6,1"
+                                                IsVisible="{Binding UpdateAvailable}">
+                                            <TextBlock Text="Update" FontSize="10" FontWeight="SemiBold" Foreground="White" />
+                                        </Border>
+                                    </StackPanel>
+                                    <TextBlock Text="{Binding LatestVersion, StringFormat='-> {0} available'}"
+                                               IsVisible="{Binding UpdateAvailable}" Opacity="0.6" FontSize="11" />
+                                    <ItemsControl ItemsSource="{Binding Keybinds}" IsVisible="{Binding HasKeybinds}">
+                                        <ItemsControl.ItemsPanel>
+                                            <ItemsPanelTemplate>
+                                                <WrapPanel />
+                                            </ItemsPanelTemplate>
+                                        </ItemsControl.ItemsPanel>
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate x:DataType="x:String">
+                                                <Border Background="{DynamicResource BifrostBadgeTintSoftBrush}" CornerRadius="4" Padding="5,1" Margin="0,0,4,3">
+                                                    <TextBlock Text="{Binding}" FontSize="10" Foreground="{DynamicResource BifrostSecondaryAccentBrush}" />
+                                                </Border>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </StackPanel>
+
+                                <Button Grid.Column="3" Content="Config" Margin="4,0"
+                                        IsVisible="{Binding HasConfig}"
+                                        Click="OnEditConfigClick" />
+                                <Button Grid.Column="4" Content="Update" Margin="4,0"
+                                        IsVisible="{Binding UpdateAvailable}"
+                                        Background="{DynamicResource BifrostAccentButtonFillBrush}" Foreground="White"
+                                        Command="{Binding $parent[ListBox].((vm:InstalledViewModel)DataContext).UpdateCommand}"
+                                        CommandParameter="{Binding}" />
+                                <Button Grid.Column="5" Content="Remove"
+                                        Command="{Binding $parent[ListBox].((vm:InstalledViewModel)DataContext).RemoveCommand}"
+                                        CommandParameter="{Binding}" />
+                            </Grid>
+                        </Border>
+                    </DataTemplate>
+                </ListBox.ItemTemplate>
+            </ListBox>
+        </Grid>
+
+        <TextBlock Grid.Row="3" Text="{Binding StatusMessage}" TextWrapping="Wrap" Opacity="0.7" FontSize="12" Margin="0,12,0,0" />
     </Grid>
 </UserControl>

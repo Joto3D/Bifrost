@@ -44,7 +44,21 @@ public partial class BrowseViewModel : ViewModelBase
     public BrowseViewModel(AppServices services)
     {
         _services = services;
+        Packages.CollectionChanged += (_, _) =>
+        {
+            OnPropertyChanged(nameof(HasResults));
+            OnPropertyChanged(nameof(ShowEmptyState));
+        };
     }
+
+    /// <summary>True once at least one package is showing — gates the list vs. the loading/empty placeholders.</summary>
+    public bool HasResults => Packages.Count > 0;
+
+    /// <summary>The very first load, before anything has ever rendered — a stronger "loading thousands of mods" message rather than just a small spinner next to Refresh.</summary>
+    public bool ShowLoadingState => IsLoading && Packages.Count == 0;
+
+    /// <summary>Load finished (successfully or not) but nothing matches — either an empty search result or a genuinely empty/failed index fetch.</summary>
+    public bool ShowEmptyState => !IsLoading && Packages.Count == 0;
 
     [RelayCommand]
     public async Task LoadAsync(bool force = false)
@@ -65,6 +79,12 @@ public partial class BrowseViewModel : ViewModelBase
         {
             IsLoading = false;
         }
+    }
+
+    partial void OnIsLoadingChanged(bool value)
+    {
+        OnPropertyChanged(nameof(ShowLoadingState));
+        OnPropertyChanged(nameof(ShowEmptyState));
     }
 
     partial void OnSearchTextChanged(string value) => ApplyFilter();
